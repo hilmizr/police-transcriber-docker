@@ -1,4 +1,5 @@
 ".env" 
+.env
 
 # Ignore audio samples
 audio_sample/
