@@ -9,6 +9,10 @@ from app.services import export_markdown_and_pdf
 from fastapi import Query
 from typing import List, Dict  # ✅ Include Dict
 from dotenv import load_dotenv
+from uuid import uuid4
+from datetime import datetime
+from markdown_pdf import MarkdownPdf, Section
+
 
 load_dotenv()
 
@@ -137,7 +141,7 @@ from uuid import uuid4
 from datetime import datetime
 
 # Global dictionary to track task progress
-task_status: Dict[str, str] = {}
+task_status: Dict[str, Dict[str, object]] = {}
 
 from fastapi.responses import StreamingResponse
 import zipfile
@@ -145,109 +149,102 @@ import io
 
 from fastapi import BackgroundTasks
 
+from uuid import uuid4
+from datetime import datetime
+import os
+import json
+import zipfile
+import asyncio
+from fastapi import UploadFile, File
+
 @app.post("/full-process-async")
 async def full_process_async(file: UploadFile = File(...)):
     task_id = str(uuid4())
-    task_status[task_id] = "📤 Uploading file..."
+    audio_id = str(uuid4())  # Unique ID for this audio and all related outputs
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # ✅ Fix: Read the content before the file is closed
+    task_status[task_id] = {"message": "📤 Uploading file...", "progress": 5}
+
     file_bytes = await file.read()
-    original_filename = file.filename
+    original_ext = os.path.splitext(file.filename)[1] or ".wav"
+    audio_path = os.path.join(AUDIO_DIR, f"{audio_id}{original_ext}")
 
     async def background_task():
         try:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            audio_path = os.path.join(AUDIO_DIR, f"{uuid4().hex}_{original_filename}")
-
+            # Save uploaded audio file
             with open(audio_path, "wb") as f:
                 f.write(file_bytes)
 
-            task_status[task_id] = "📝 Transcribing + diarizing..."
+            task_status[task_id] = {"message": "📝 Transcribing + diarizing...", "progress": 25}
             transcript, diarization = process_audio(audio_path, asr_model, diarization_pipeline)
             aligned = align_segments(transcript, diarization)
 
-            task_status[task_id] = "✨ Polishing with LLM..."
+            task_status[task_id] = {"message": "✨ Polishing with LLM...", "progress": 50}
             polished = enhance_with_llm(aligned, model_name)
 
-            task_status[task_id] = "📄 Generating Berita Acara..."
+            task_status[task_id] = {"message": "📄 Extracting Pasal Hukum...", "progress": 70}
             pasal = extract_pasal_hukum(polished, model_name)
-            markdown = generate_berita_acara(polished, model_name, pasal)
 
-            task_status[task_id] = "📁 Exporting to Markdown and PDF..."
-            md_path, pdf_path = export_markdown_and_pdf(markdown, base_filename=f"berita_acara_{timestamp}")
+            # Save pasal markdown file
+            pasal_md_name = f"{audio_id}_{timestamp}_pasal.md"
+            pasal_md_path = os.path.join(OUTPUT_DIR, pasal_md_name)
+            with open(pasal_md_path, "w", encoding="utf-8") as f:
+                f.write(pasal)
 
-            task_status[task_id] = "📦 Zipping output files..."
-            zip_path = os.path.join(OUTPUT_DIR, f"pipeline_output_{timestamp}.zip")
+            task_status[task_id] = {"message": "📄 Generating Berita Acara...", "progress": 80}
+            berita_acara_markdown = generate_berita_acara(polished, model_name, pasal)
+
+            # Define berita acara file paths
+            md_name = f"{audio_id}_{timestamp}_berita_acara.md"
+            pdf_name = f"{audio_id}_{timestamp}_berita_acara.pdf"
+            md_path = os.path.join(OUTPUT_DIR, md_name)
+            pdf_path = os.path.join(OUTPUT_DIR, pdf_name)
+
+            # Save Berita Acara markdown
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write(berita_acara_markdown)
+
+            # Save Berita Acara PDF
+            pdf = MarkdownPdf(toc_level=2)
+            pdf.add_section(Section(berita_acara_markdown))
+            pdf.meta["title"] = "Berita Acara Gelar Perkara"
+            pdf.save(pdf_path)
+
+            task_status[task_id] = {"message": "📦 Zipping output files...", "progress": 90}
+            zip_name = f"{audio_id}_{timestamp}_output.zip"
+            zip_path = os.path.join(OUTPUT_DIR, zip_name)
             with zipfile.ZipFile(zip_path, "w") as zipf:
-                zipf.writestr(f"transcript_{timestamp}.json", json.dumps(transcript, ensure_ascii=False, indent=2))
+                # Save transcript JSON
+                zipf.writestr(f"{audio_id}_{timestamp}_transcript.json", json.dumps(transcript, ensure_ascii=False, indent=2))
+
+                # Save diarization JSON
                 diarization_data = [
                     {"speaker": spk, "start": turn.start, "end": turn.end}
                     for turn, _, spk in diarization.itertracks(yield_label=True)
                 ]
-                zipf.writestr(f"diarization_{timestamp}.json", json.dumps(diarization_data, ensure_ascii=False, indent=2))
-                zipf.writestr(f"polished_{timestamp}.json", json.dumps(polished, ensure_ascii=False, indent=2))
-                with open(md_path, "r", encoding="utf-8") as f:
-                    zipf.writestr(os.path.basename(md_path), f.read())
-                with open(pdf_path, "rb") as f:
-                    zipf.writestr(os.path.basename(pdf_path), f.read())
+                zipf.writestr(f"{audio_id}_{timestamp}_diarization.json", json.dumps(diarization_data, ensure_ascii=False, indent=2))
 
-            task_status[task_id] = f"✅ Completed: /download?file={os.path.basename(zip_path)}"
+                # Save polished transcript JSON
+                zipf.writestr(f"{audio_id}_{timestamp}_polished.json", json.dumps(polished, ensure_ascii=False, indent=2))
+
+                # Add pasal, markdown, and pdf files into ZIP
+                zipf.write(pasal_md_path, arcname=pasal_md_name)
+                zipf.write(md_path, arcname=md_name)
+                zipf.write(pdf_path, arcname=pdf_name)
+
+            task_status[task_id] = {"message": f"✅ Completed: /download?file={zip_name}", "progress": 100}
         except Exception as e:
             logger.error(f"❌ Error in background task: {str(e)}")
-            task_status[task_id] = f"❌ Error: {str(e)}"
+            task_status[task_id] = {"message": f"❌ Error: {str(e)}", "progress": 100}
 
-
-    import asyncio
     asyncio.create_task(background_task())
 
     return {"task_id": task_id}
 
-
 @app.get("/status/{task_id}")
 def get_status(task_id: str):
-    return {"status": task_status.get(task_id, "❓ Unknown task")}
-
-@app.post("/full-process")
-async def full_process(file: UploadFile = File(...)):
-    # Step 1: Save audio
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    audio_dir = AUDIO_DIR
-    os.makedirs(audio_dir, exist_ok=True)
-    filename = f"{uuid.uuid4().hex}_{file.filename}"
-    audio_path = os.path.join(audio_dir, filename)
-    with open(audio_path, "wb") as f:
-        f.write(await file.read())
-
-    # Step 2: Process audio
-    transcript, diarization = process_audio(audio_path, asr_model, diarization_pipeline)
-    aligned = align_segments(transcript, diarization)
-    polished = enhance_with_llm(aligned, model_name)
-    pasal = extract_pasal_hukum(polished, model_name)
-    markdown = generate_berita_acara(polished, model_name, pasal)
-    md_path, pdf_path = export_markdown_and_pdf(markdown, base_filename=f"berita_acara_{timestamp}")
-
-    # Step 3: Create ZIP file in memory
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w") as zipf:
-        # Add transcript
-        zipf.writestr(f"transcript_{timestamp}.json", json.dumps(transcript, ensure_ascii=False, indent=2))
-        # Add diarization
-        diarization_data = [
-            {"speaker": spk, "start": turn.start, "end": turn.end}
-            for turn, _, spk in diarization.itertracks(yield_label=True)
-        ]
-        zipf.writestr(f"diarization_{timestamp}.json", json.dumps(diarization_data, ensure_ascii=False, indent=2))
-        # Add polished transcript
-        zipf.writestr(f"polished_transcript_{timestamp}.json", json.dumps(polished, ensure_ascii=False, indent=2))
-        # Add Markdown
-        with open(md_path, "r", encoding="utf-8") as f:
-            zipf.writestr(os.path.basename(md_path), f.read())
-        # Add PDF
-        with open(pdf_path, "rb") as f:
-            zipf.writestr(os.path.basename(pdf_path), f.read())
-
-    zip_buffer.seek(0)
-    return StreamingResponse(zip_buffer, media_type="application/zip", headers={
-        "Content-Disposition": f"attachment; filename=output_{timestamp}.zip"
-    })
+    status = task_status.get(task_id)
+    if status is None:
+        return {"message": "❓ Unknown task", "progress": 0}
+    return status
 

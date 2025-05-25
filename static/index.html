@@ -54,7 +54,11 @@
 
     <h2>📦 Download ZIP</h2>
     <button onclick="runFullProcess()">Run Full Pipeline 🔁</button>
+    <progress id="progressBar" value="0" max="100" style="width: 100%; height: 20px; margin-top: 1rem;"></progress>
+    <div id="progressMessage" style="margin-top: 0.5rem; font-weight: bold;"></div>
     <div id="progress"></div>
+    <div id="elapsedTime" style="margin-top: 0.3rem; font-style: italic;"></div>
+
 
 
 
@@ -166,25 +170,6 @@
             window.open("/download?file=" + encodeURIComponent(latestPdfFile), "_blank");
         }
 
-        async function runFullPipeline() {
-            const formData = new FormData();
-            formData.append("file", document.getElementById("audioFile").files[0]);
-
-            const res = await fetch("/full-process", {
-                method: "POST",
-                body: formData
-            });
-
-            const blob = await res.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = "full_pipeline_output.zip";
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-        }
-
         async function runFullProcess() {
             const file = document.getElementById("audioFile").files[0];
             const formData = new FormData();
@@ -197,32 +182,53 @@
             const {
                 task_id
             } = await startRes.json();
-            document.getElementById("progress").innerText = "⏳ Starting pipeline...";
+
+            const progressBar = document.getElementById("progressBar");
+            const progressMessage = document.getElementById("progressMessage");
+            const elapsedTimeDiv = document.getElementById("elapsedTime");
+            const progressDiv = document.getElementById("progress");
+
+            progressBar.value = 0;
+            progressMessage.innerText = "⏳ Starting pipeline...";
+            elapsedTimeDiv.innerText = "Elapsed time: 0s";
+
+            const startTime = Date.now();
 
             const interval = setInterval(async() => {
                 const res = await fetch(`/status/${task_id}`);
                 const {
-                    status
+                    message,
+                    progress
                 } = await res.json();
-                document.getElementById("progress").innerText = status;
 
-                if (status.startsWith("✅")) {
-                    clearInterval(interval);
-                    const downloadLink = status.split(": ")[1];
-                    const a = document.createElement("a");
-                    a.href = downloadLink;
-                    a.innerText = "⬇️ Download ZIP";
-                    a.download = downloadLink.split("file=")[1];
-                    document.getElementById("progress").appendChild(document.createElement("br"));
-                    document.getElementById("progress").appendChild(a);
-                }
+                progressBar.value = progress || 0;
+                progressMessage.innerText = message || "";
 
-                if (status.startsWith("❌")) {
+                // Calculate elapsed time
+                const elapsedMs = Date.now() - startTime;
+                const elapsedSeconds = Math.floor(elapsedMs / 1000);
+                const minutes = Math.floor(elapsedSeconds / 60);
+                const seconds = elapsedSeconds % 60;
+
+                elapsedTimeDiv.innerText = minutes > 0 ?
+                    `Elapsed time: ${minutes}m ${seconds}s` :
+                    `Elapsed time: ${seconds}s`;
+
+                if (progress >= 100 || message.startsWith("✅") || message.startsWith("❌")) {
                     clearInterval(interval);
+
+                    if (message.startsWith("✅")) {
+                        const downloadLink = message.split(": ")[1];
+                        const a = document.createElement("a");
+                        a.href = downloadLink;
+                        a.innerText = "⬇️ Download ZIP";
+                        a.download = downloadLink.split("file=")[1];
+                        progressDiv.appendChild(document.createElement("br"));
+                        progressDiv.appendChild(a);
+                    }
                 }
             }, 2000);
         }
-
 
         async function extractPasal() {
             const raw = document.getElementById("polishedOutput").value.trim();

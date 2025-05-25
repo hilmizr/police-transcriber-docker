@@ -1,1 +1,11 @@
 ".env" 
+
+# Ignore audio samples
+audio_sample/
+
+# Ignore model and transformer cache
+cache/
+hf_transformers/
+
+# Ignore all output files
+output/

@@ -178,18 +178,11 @@ Catatan penting:
     result = chain.invoke({"input": formatted_input})
     return result.content
 
-def export_markdown_and_pdf(content: str, base_filename: str = "berita_acara"):
-    output_dir = OUTPUT_DIR
+def export_markdown_and_pdf(content: str, md_path: str, pdf_path: str):
+    output_dir = os.path.dirname(md_path)
     os.makedirs(output_dir, exist_ok=True)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    md_name = f"{base_filename}_{timestamp}.md"
-    pdf_name = f"{base_filename}_{timestamp}.pdf"
-
-    md_path = os.path.join(output_dir, md_name)
-    pdf_path = os.path.join(output_dir, pdf_name)
-
-    # Save .md
+    # Save markdown
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(content)
 
