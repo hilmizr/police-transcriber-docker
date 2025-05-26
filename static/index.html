@@ -51,6 +51,25 @@
             text-decoration: none;
             border-radius: 4px;
         }
+        /* New sections styling */
+        
+        section {
+            border: 1px solid #ccc;
+            padding: 1rem;
+            margin-top: 2rem;
+            border-radius: 6px;
+        }
+        
+        h2 {
+            margin-top: 0;
+        }
+        
+        pre {
+            background: #f4f4f4;
+            padding: 0.5rem;
+            overflow-x: auto;
+            max-height: 200px;
+        }
     </style>
 </head>
 
@@ -69,7 +88,36 @@
     <div id="elapsedTime"></div>
     <div id="downloadLink"></div>
 
+    <!-- ==== New Section: full-process-sync (v1) ==== -->
+    <section id="syncV1Section">
+        <h2>Test full-process-sync (v1) - with PDF download URL</h2>
+        <input type="file" id="syncV1File" accept=".wav,.mp3,.m4a" />
+        <audio id="syncV1Audio" controls style="display:none;"></audio><br />
+        <button id="syncV1RunBtn" disabled>Run full-process-sync</button>
+        <progress id="syncV1ProgressBar" value="0" max="100" style="width:100%;"></progress>
+        <div id="syncV1ProgressMsg"></div>
+        <div id="syncV1Elapsed"></div>
+        <div id="syncV1Downloads"></div>
+        <pre id="syncV1Output" style="white-space: pre-wrap;"></pre>
+    </section>
+
+    <!-- ==== New Section: full-process-sync-base64 (v2) ==== -->
+    <section id="syncV2Section">
+        <h2>Test full-process-sync-base64 (v2) - with PDF base64 embed</h2>
+        <input type="file" id="syncV2File" accept=".wav,.mp3,.m4a" />
+        <audio id="syncV2Audio" controls style="display:none;"></audio><br />
+        <button id="syncV2RunBtn" disabled>Run full-process-sync-base64</button>
+        <progress id="syncV2ProgressBar" value="0" max="100" style="width:100%;"></progress>
+        <div id="syncV2ProgressMsg"></div>
+        <div id="syncV2Elapsed"></div>
+        <div id="syncV2Downloads"></div>
+        <pre id="syncV2Output" style="white-space: pre-wrap;"></pre>
+    </section>
+
     <script>
+        const API_BASE = "http://localhost:8000";
+
+        // === Existing main full-process-async UI logic ===
         const audioInput = document.getElementById("audioFile");
         const audioPlayer = document.getElementById("audioPlayer");
         const runBtn = document.getElementById("runPipelineBtn");
@@ -82,7 +130,6 @@
         let intervalId = null;
         let startTime = null;
 
-        // When user selects a file, enable button and show audio player
         audioInput.addEventListener("change", () => {
             if (audioInput.files.length === 0) {
                 audioPlayer.style.display = "none";
@@ -95,14 +142,11 @@
             audioPlayer.style.display = "block";
             runBtn.disabled = false;
 
-            // Reset UI
             progressBar.value = 0;
             progressMessage.textContent = "";
             elapsedTimeDiv.textContent = "";
             downloadDiv.innerHTML = "";
-            if (intervalId) {
-                clearInterval(intervalId);
-            }
+            if (intervalId) clearInterval(intervalId);
         });
 
         runBtn.addEventListener("click", async() => {
@@ -122,7 +166,7 @@
             formData.append("file", file);
 
             try {
-                const response = await fetch("/full-process-async", {
+                const response = await fetch(`${API_BASE}/full-process-async`, {
                     method: "POST",
                     body: formData,
                 });
@@ -131,9 +175,8 @@
                 taskId = data.task_id;
                 startTime = Date.now();
 
-                // Poll progress every 2 seconds
                 intervalId = setInterval(async() => {
-                    const statusRes = await fetch(`/status/${taskId}`);
+                    const statusRes = await fetch(`${API_BASE}/status/${taskId}`);
                     const status = await statusRes.json();
 
                     progressBar.value = status.progress || 0;
@@ -166,6 +209,172 @@
                 runBtn.disabled = false;
                 progressMessage.textContent = `❌ Error: ${error.message}`;
             }
+        });
+
+        // ==== New code for full-process-sync (v1) ====
+        const syncV1File = document.getElementById("syncV1File");
+        const syncV1Audio = document.getElementById("syncV1Audio");
+        const syncV1RunBtn = document.getElementById("syncV1RunBtn");
+        const syncV1ProgressBar = document.getElementById("syncV1ProgressBar");
+        const syncV1ProgressMsg = document.getElementById("syncV1ProgressMsg");
+        const syncV1Elapsed = document.getElementById("syncV1Elapsed");
+        const syncV1Downloads = document.getElementById("syncV1Downloads");
+        const syncV1Output = document.getElementById("syncV1Output");
+
+        syncV1File.addEventListener("change", () => {
+            if (syncV1File.files.length === 0) {
+                syncV1Audio.style.display = "none";
+                syncV1RunBtn.disabled = true;
+                return;
+            }
+            const file = syncV1File.files[0];
+            const url = URL.createObjectURL(file);
+            syncV1Audio.src = url;
+            syncV1Audio.style.display = "block";
+            syncV1RunBtn.disabled = false;
+
+            syncV1ProgressBar.value = 0;
+            syncV1ProgressMsg.textContent = "";
+            syncV1Elapsed.textContent = "";
+            syncV1Downloads.innerHTML = "";
+            syncV1Output.textContent = "";
+        });
+
+        syncV1RunBtn.addEventListener("click", async() => {
+            if (syncV1File.files.length === 0) {
+                alert("Please upload an audio file first.");
+                return;
+            }
+
+            syncV1RunBtn.disabled = true;
+            syncV1ProgressBar.value = 0;
+            syncV1ProgressMsg.textContent = "⏳ Processing...";
+            syncV1Elapsed.textContent = "";
+            syncV1Downloads.innerHTML = "";
+            syncV1Output.textContent = "";
+
+            const file = syncV1File.files[0];
+            const formData = new FormData();
+            formData.append("file", file);
+
+            const startTime = Date.now();
+
+            try {
+                const res = await fetch(`${API_BASE}/full-process-sync`, {
+                    method: "POST",
+                    body: formData,
+                });
+                const data = await res.json();
+
+                syncV1ProgressBar.value = 100;
+                syncV1ProgressMsg.textContent = "✅ Completed.";
+                syncV1Elapsed.textContent = `Elapsed time: ${Math.floor((Date.now() - startTime) / 1000)}s`;
+
+                syncV1Output.textContent = JSON.stringify(data, null, 2);
+
+                syncV1Downloads.innerHTML = `
+                    <a href="${API_BASE}/download?file=${encodeURIComponent(data.saved_files.pasal_markdown)}" target="_blank" download>⬇️ Download Pasal Markdown</a><br>
+                    <a href="${API_BASE}/download?file=${encodeURIComponent(data.saved_files.berita_acara_markdown)}" target="_blank" download>⬇️ Download Berita Acara Markdown</a><br>
+                    <a href="${API_BASE}${data.saved_files.berita_acara_pdf_url}" target="_blank" download>⬇️ Download Berita Acara PDF</a>
+                `;
+
+            } catch (error) {
+                syncV1RunBtn.disabled = false;
+                syncV1ProgressMsg.textContent = `❌ Error: ${error.message}`;
+            }
+
+            syncV1RunBtn.disabled = false;
+        });
+
+        // ==== New code for full-process-sync-base64 (v2) ====
+        const syncV2File = document.getElementById("syncV2File");
+        const syncV2Audio = document.getElementById("syncV2Audio");
+        const syncV2RunBtn = document.getElementById("syncV2RunBtn");
+        const syncV2ProgressBar = document.getElementById("syncV2ProgressBar");
+        const syncV2ProgressMsg = document.getElementById("syncV2ProgressMsg");
+        const syncV2Elapsed = document.getElementById("syncV2Elapsed");
+        const syncV2Downloads = document.getElementById("syncV2Downloads");
+        const syncV2Output = document.getElementById("syncV2Output");
+
+        syncV2File.addEventListener("change", () => {
+            if (syncV2File.files.length === 0) {
+                syncV2Audio.style.display = "none";
+                syncV2RunBtn.disabled = true;
+                return;
+            }
+            const file = syncV2File.files[0];
+            const url = URL.createObjectURL(file);
+            syncV2Audio.src = url;
+            syncV2Audio.style.display = "block";
+            syncV2RunBtn.disabled = false;
+
+            syncV2ProgressBar.value = 0;
+            syncV2ProgressMsg.textContent = "";
+            syncV2Elapsed.textContent = "";
+            syncV2Downloads.innerHTML = "";
+            syncV2Output.textContent = "";
+        });
+
+        syncV2RunBtn.addEventListener("click", async() => {
+            if (syncV2File.files.length === 0) {
+                alert("Please upload an audio file first.");
+                return;
+            }
+
+            syncV2RunBtn.disabled = true;
+            syncV2ProgressBar.value = 0;
+            syncV2ProgressMsg.textContent = "⏳ Processing...";
+            syncV2Elapsed.textContent = "";
+            syncV2Downloads.innerHTML = "";
+            syncV2Output.textContent = "";
+
+            const file = syncV2File.files[0];
+            const formData = new FormData();
+            formData.append("file", file);
+
+            const startTime = Date.now();
+
+            try {
+                const res = await fetch(`${API_BASE}/full-process-sync-base64`, {
+                    method: "POST",
+                    body: formData,
+                });
+                const data = await res.json();
+
+                syncV2ProgressBar.value = 100;
+                syncV2ProgressMsg.textContent = "✅ Completed.";
+                syncV2Elapsed.textContent = `Elapsed time: ${Math.floor((Date.now() - startTime) / 1000)}s`;
+
+                syncV2Output.textContent = JSON.stringify(data, null, 2);
+
+                syncV2Downloads.innerHTML = `
+                    <a href="${API_BASE}/download?file=${encodeURIComponent(data.saved_files.pasal_markdown)}" target="_blank" download>⬇️ Download Pasal Markdown</a><br>
+                    <a href="${API_BASE}/download?file=${encodeURIComponent(data.saved_files.berita_acara_markdown)}" target="_blank" download>⬇️ Download Berita Acara Markdown</a><br>
+                `;
+
+                // For base64 PDF: create a blob and object URL for download & embed preview
+                const pdfBytes = atob(data.berita_acara_pdf_base64);
+                const len = pdfBytes.length;
+                const bytes = new Uint8Array(len);
+                for (let i = 0; i < len; i++) {
+                    bytes[i] = pdfBytes.charCodeAt(i);
+                }
+                const blob = new Blob([bytes], {
+                    type: "application/pdf"
+                });
+                const pdfUrl = URL.createObjectURL(blob);
+
+                syncV2Downloads.innerHTML += `
+                    <a href="${pdfUrl}" target="_blank" download="${data.saved_files.berita_acara_pdf}">⬇️ Download Berita Acara PDF</a><br>
+                    <iframe src="${pdfUrl}" style="width:100%; height:400px; border:none; margin-top:10px;"></iframe>
+                `;
+
+            } catch (error) {
+                syncV2RunBtn.disabled = false;
+                syncV2ProgressMsg.textContent = `❌ Error: ${error.message}`;
+            }
+
+            syncV2RunBtn.disabled = false;
         });
     </script>
 </body>
