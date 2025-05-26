@@ -300,3 +300,35 @@ async def full_process_sync_v2(
             "berita_acara_pdf": pdf_name,
         },
     }
+
+# === ADDED SUMMARIZE CASE ===
+
+from typing import List
+from fastapi import UploadFile, File
+from app.services import summarize_berita_acara
+
+@app.post("/summarize-case")
+async def summarize_case(files: List[UploadFile] = File(...)):
+    # Read markdown content
+    markdowns = []
+    for f in files:
+        raw = await f.read()
+        markdowns.append(raw.decode("utf-8"))
+
+    # Summarize via your service
+    result = summarize_berita_acara(markdowns, model_name)
+
+    # Optionally persist the summaries:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    txt_name = f"case_summary_{timestamp}.txt"
+    md_name  = f"case_summary_{timestamp}.md"
+    with open(os.path.join(OUTPUT_DIR, txt_name), "w", encoding="utf-8") as t:
+        t.write(result["summary_text"])
+    with open(os.path.join(OUTPUT_DIR, md_name), "w", encoding="utf-8") as m:
+        m.write(result["summary_markdown"])
+
+    return {
+        **result,
+        "saved_files": {"text": txt_name, "markdown": md_name},
+        "download_prefix": "/download?file="
+    }

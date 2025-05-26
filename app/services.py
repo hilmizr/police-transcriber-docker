@@ -169,7 +169,7 @@ Catatan penting:
         ("user", "{input}")
     ])
 
-    llm = ChatOpenRouter(model_name=model_name, temperature=0.3, max_tokens=16000)
+    llm = ChatOpenRouter(model_name=model_name, temperature=0.3, max_tokens=4000)
     chain = berita_acara_prompt.partial(
         nomor_berita_acara=nomor,
         tanggal=tanggal,
@@ -222,7 +222,37 @@ def extract_pasal_hukum(aligned_segments: list, model_name: str) -> str:
         f"{seg['speaker']}: {seg['text']}" for seg in aligned_segments
     )
 
-    llm = ChatOpenRouter(model_name=model_name, temperature=0.2, max_tokens=16000)
+    llm = ChatOpenRouter(model_name=model_name, temperature=0.2, max_tokens=4000)
     chain = pasal_prompt | llm
     result = chain.invoke({"input": combined_transcript})
     return result.content
+
+# === ADDED SUMMARIZE CASE ===
+
+def summarize_berita_acara(markdowns: list[str], model_name: str) -> dict:
+    # 1. Join them into one prompt
+    joined = "\n\n---\n\n".join(markdowns)
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """
+Anda adalah asisten AI yang ahli dalam merangkum dokumen resmi gelar perkara.
+Anda akan menerima beberapa Berita Acara (Markdown) terpisah.
+Buat dua output:
+1. summary_text: ringkasan eksekutif singkat (1–2 paragraf) dalam teks biasa.
+2. summary_markdown: ringkasan formal dalam Markdown (gunakan heading, daftar, dll.).
+
+Kembalikan sebagai JSON:
+{
+  "summary_text": "...",
+  "summary_markdown": "## Ringkasan Persidangan\n- …"
+}
+"""),
+        ("user", "{input}")
+    ])
+
+    llm = ChatOpenRouter(model_name=model_name, temperature=0.3, max_tokens=16000)
+    chain = prompt | llm
+    result = chain.invoke({"input": joined})
+    try:
+        return json.loads(result.content)
+    except json.JSONDecodeError:
+        raise RuntimeError("Gagal parse JSON dari LLM.")
