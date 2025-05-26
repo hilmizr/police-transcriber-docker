@@ -130,6 +130,18 @@
         let intervalId = null;
         let startTime = null;
 
+        function getFormattedTimestamp() {
+            const dt = new Date();
+            const yyyy = dt.getFullYear();
+            const mm = String(dt.getMonth() + 1).padStart(2, '0');
+            const dd = String(dt.getDate()).padStart(2, '0');
+            const hh = String(dt.getHours()).padStart(2, '0');
+            const min = String(dt.getMinutes()).padStart(2, '0');
+            const ss = String(dt.getSeconds()).padStart(2, '0');
+            return `${yyyy}${mm}${dd}_${hh}${min}${ss}`;
+        }
+
+
         audioInput.addEventListener("change", () => {
             if (audioInput.files.length === 0) {
                 audioPlayer.style.display = "none";
@@ -211,35 +223,6 @@
             }
         });
 
-        // ==== New code for full-process-sync (v1) ====
-        const syncV1File = document.getElementById("syncV1File");
-        const syncV1Audio = document.getElementById("syncV1Audio");
-        const syncV1RunBtn = document.getElementById("syncV1RunBtn");
-        const syncV1ProgressBar = document.getElementById("syncV1ProgressBar");
-        const syncV1ProgressMsg = document.getElementById("syncV1ProgressMsg");
-        const syncV1Elapsed = document.getElementById("syncV1Elapsed");
-        const syncV1Downloads = document.getElementById("syncV1Downloads");
-        const syncV1Output = document.getElementById("syncV1Output");
-
-        syncV1File.addEventListener("change", () => {
-            if (syncV1File.files.length === 0) {
-                syncV1Audio.style.display = "none";
-                syncV1RunBtn.disabled = true;
-                return;
-            }
-            const file = syncV1File.files[0];
-            const url = URL.createObjectURL(file);
-            syncV1Audio.src = url;
-            syncV1Audio.style.display = "block";
-            syncV1RunBtn.disabled = false;
-
-            syncV1ProgressBar.value = 0;
-            syncV1ProgressMsg.textContent = "";
-            syncV1Elapsed.textContent = "";
-            syncV1Downloads.innerHTML = "";
-            syncV1Output.textContent = "";
-        });
-
         syncV1RunBtn.addEventListener("click", async() => {
             if (syncV1File.files.length === 0) {
                 alert("Please upload an audio file first.");
@@ -272,10 +255,12 @@
 
                 syncV1Output.textContent = JSON.stringify(data, null, 2);
 
+                // Use backend filename for polished JSON download
                 syncV1Downloads.innerHTML = `
                     <a href="${API_BASE}/download?file=${encodeURIComponent(data.saved_files.pasal_markdown)}" target="_blank" download>⬇️ Download Pasal Markdown</a><br>
                     <a href="${API_BASE}/download?file=${encodeURIComponent(data.saved_files.berita_acara_markdown)}" target="_blank" download>⬇️ Download Berita Acara Markdown</a><br>
-                    <a href="${API_BASE}${data.saved_files.berita_acara_pdf_url}" target="_blank" download>⬇️ Download Berita Acara PDF</a>
+                    <a href="${API_BASE}${data.saved_files.berita_acara_pdf_url}" target="_blank" download>⬇️ Download Berita Acara PDF</a><br>
+                    <a href="${API_BASE}/download?file=${encodeURIComponent(data.saved_files.polished_json)}" target="_blank" download>⬇️ Download Polished Transcript JSON</a>
                 `;
 
             } catch (error) {
@@ -284,35 +269,6 @@
             }
 
             syncV1RunBtn.disabled = false;
-        });
-
-        // ==== New code for full-process-sync-base64 (v2) ====
-        const syncV2File = document.getElementById("syncV2File");
-        const syncV2Audio = document.getElementById("syncV2Audio");
-        const syncV2RunBtn = document.getElementById("syncV2RunBtn");
-        const syncV2ProgressBar = document.getElementById("syncV2ProgressBar");
-        const syncV2ProgressMsg = document.getElementById("syncV2ProgressMsg");
-        const syncV2Elapsed = document.getElementById("syncV2Elapsed");
-        const syncV2Downloads = document.getElementById("syncV2Downloads");
-        const syncV2Output = document.getElementById("syncV2Output");
-
-        syncV2File.addEventListener("change", () => {
-            if (syncV2File.files.length === 0) {
-                syncV2Audio.style.display = "none";
-                syncV2RunBtn.disabled = true;
-                return;
-            }
-            const file = syncV2File.files[0];
-            const url = URL.createObjectURL(file);
-            syncV2Audio.src = url;
-            syncV2Audio.style.display = "block";
-            syncV2RunBtn.disabled = false;
-
-            syncV2ProgressBar.value = 0;
-            syncV2ProgressMsg.textContent = "";
-            syncV2Elapsed.textContent = "";
-            syncV2Downloads.innerHTML = "";
-            syncV2Output.textContent = "";
         });
 
         syncV2RunBtn.addEventListener("click", async() => {
@@ -347,9 +303,11 @@
 
                 syncV2Output.textContent = JSON.stringify(data, null, 2);
 
+                // Use backend filename for polished JSON download
                 syncV2Downloads.innerHTML = `
                     <a href="${API_BASE}/download?file=${encodeURIComponent(data.saved_files.pasal_markdown)}" target="_blank" download>⬇️ Download Pasal Markdown</a><br>
                     <a href="${API_BASE}/download?file=${encodeURIComponent(data.saved_files.berita_acara_markdown)}" target="_blank" download>⬇️ Download Berita Acara Markdown</a><br>
+                    <a href="${API_BASE}/download?file=${encodeURIComponent(data.saved_files.polished_json)}" target="_blank" download>⬇️ Download Polished Transcript JSON</a><br>
                 `;
 
                 // For base64 PDF: create a blob and object URL for download & embed preview

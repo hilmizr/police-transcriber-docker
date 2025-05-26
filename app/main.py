@@ -174,7 +174,6 @@ async def full_process_sync(
     file: UploadFile = File(...),
     task_id: str = Form(None)  # Optional task_id from client
 ):
-    # Use provided task_id or generate a new one
     if not task_id:
         task_id = str(uuid.uuid4())
     audio_id = task_id
@@ -188,13 +187,19 @@ async def full_process_sync(
     with open(audio_path, "wb") as f:
         f.write(file_bytes)
 
-    # Run entire pipeline synchronously
+    # Run pipeline synchronously
     transcript, diarization = process_audio(audio_path, asr_model, diarization_pipeline)
     aligned = align_segments(transcript, diarization)
 
     polished = enhance_with_llm(aligned, model_name)
     pasal = extract_pasal_hukum(polished, model_name)
     berita_acara_markdown = generate_berita_acara(polished, model_name, pasal)
+
+    # Save polished JSON
+    polished_json_name = f"{audio_id}_{timestamp}_polished.json"
+    polished_json_path = os.path.join(OUTPUT_DIR, polished_json_name)
+    with open(polished_json_path, "w", encoding="utf-8") as f:
+        json.dump(polished, f, ensure_ascii=False, indent=2)
 
     # Save pasal markdown
     pasal_md_name = f"{audio_id}_{timestamp}_pasal.md"
@@ -216,22 +221,22 @@ async def full_process_sync(
     pdf.meta["title"] = "Berita Acara Gelar Perkara"
     pdf.save(pdf_path)
 
-    # Prepare download URL for PDF
     pdf_download_url = f"/download?file={pdf_name}"
 
-    # Return all results inline with URLs for saved files
     return {
         "task_id": task_id,
         "polished_transcript": polished,
         "pasal_markdown": pasal,
         "berita_acara_markdown": berita_acara_markdown,
         "saved_files": {
+            "polished_json": polished_json_name,
             "pasal_markdown": pasal_md_name,
             "berita_acara_markdown": md_name,
             "berita_acara_pdf": pdf_name,
             "berita_acara_pdf_url": pdf_download_url
         }
     }
+
     
 # === ADDED FULL PROCESS SYNC BASE64 FOR POSTMAN TESTING ===
 
@@ -240,7 +245,6 @@ async def full_process_sync_v2(
     file: UploadFile = File(...),
     task_id: str = Form(None)  # Optional task_id from client
 ):
-    # Use provided task_id or generate a new one
     if not task_id:
         task_id = str(uuid.uuid4())
     audio_id = task_id
@@ -254,13 +258,19 @@ async def full_process_sync_v2(
     with open(audio_path, "wb") as f:
         f.write(file_bytes)
 
-    # Run entire pipeline synchronously
+    # Run pipeline synchronously
     transcript, diarization = process_audio(audio_path, asr_model, diarization_pipeline)
     aligned = align_segments(transcript, diarization)
 
     polished = enhance_with_llm(aligned, model_name)
     pasal = extract_pasal_hukum(polished, model_name)
     berita_acara_markdown = generate_berita_acara(polished, model_name, pasal)
+
+    # Save polished JSON
+    polished_json_name = f"{audio_id}_{timestamp}_polished.json"
+    polished_json_path = os.path.join(OUTPUT_DIR, polished_json_name)
+    with open(polished_json_path, "w", encoding="utf-8") as f:
+        json.dump(polished, f, ensure_ascii=False, indent=2)
 
     # Save pasal markdown
     pasal_md_name = f"{audio_id}_{timestamp}_pasal.md"
@@ -287,7 +297,6 @@ async def full_process_sync_v2(
         pdf_bytes = f.read()
     pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
 
-    # Return all results inline, with PDF base64 embedded
     return {
         "task_id": task_id,
         "polished_transcript": polished,
@@ -295,6 +304,7 @@ async def full_process_sync_v2(
         "berita_acara_markdown": berita_acara_markdown,
         "berita_acara_pdf_base64": pdf_b64,
         "saved_files": {
+            "polished_json": polished_json_name,
             "pasal_markdown": pasal_md_name,
             "berita_acara_markdown": md_name,
             "berita_acara_pdf": pdf_name,
