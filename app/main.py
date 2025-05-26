@@ -342,3 +342,104 @@ async def summarize_case(files: List[UploadFile] = File(...)):
         "saved_files": {"text": txt_name, "markdown": md_name},
         "download_prefix": "/download?file="
     }
+# ===== ASYNC =====
+from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks
+from fastapi.responses import JSONResponse
+import uuid
+import os
+import json
+import base64
+from datetime import datetime
+from markdown_pdf import MarkdownPdf, Section
+
+task_status = {}
+
+def full_process_pipeline(task_id: str, audio_path: str, audio_id: str, timestamp: str):
+    try:
+        task_status[task_id] = {"message": "Starting processing...", "progress": 5}
+
+        transcript, diarization = process_audio(audio_path, asr_model, diarization_pipeline)
+        task_status[task_id] = {"message": "Aligning segments...", "progress": 25}
+
+        aligned = align_segments(transcript, diarization)
+        polished = enhance_with_llm(aligned, model_name)
+        task_status[task_id] = {"message": "Extracting Pasal Hukum...", "progress": 50}
+
+        pasal = extract_pasal_hukum(polished, model_name)
+        berita_acara_markdown = generate_berita_acara(polished, model_name, pasal)
+        task_status[task_id] = {"message": "Generating PDF...", "progress": 70}
+
+        # Save files
+        polished_json_name = f"{audio_id}_{timestamp}_polished.json"
+        polished_json_path = os.path.join(OUTPUT_DIR, polished_json_name)
+        with open(polished_json_path, "w", encoding="utf-8") as f:
+            json.dump(polished, f, ensure_ascii=False, indent=2)
+
+        pasal_md_name = f"{audio_id}_{timestamp}_pasal.md"
+        pasal_md_path = os.path.join(OUTPUT_DIR, pasal_md_name)
+        with open(pasal_md_path, "w", encoding="utf-8") as f:
+            f.write(pasal)
+
+        md_name = f"{audio_id}_{timestamp}_berita_acara.md"
+        md_path = os.path.join(OUTPUT_DIR, md_name)
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(berita_acara_markdown)
+
+        pdf_name = f"{audio_id}_{timestamp}_berita_acara.pdf"
+        pdf_path = os.path.join(OUTPUT_DIR, pdf_name)
+        pdf = MarkdownPdf(toc_level=2)
+        pdf.add_section(Section(berita_acara_markdown))
+        pdf.meta["title"] = "Berita Acara Gelar Perkara"
+        pdf.save(pdf_path)
+
+        with open(pdf_path, "rb") as f:
+            pdf_bytes = f.read()
+        pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+
+        task_status[task_id] = {
+            "message": "Completed",
+            "progress": 100,
+            "result": {
+                "polished_transcript": polished,
+                "pasal_markdown": pasal,
+                "berita_acara_markdown": berita_acara_markdown,
+                "berita_acara_pdf_base64": pdf_b64,
+                "saved_files": {
+                    "polished_json": polished_json_name,
+                    "pasal_markdown": pasal_md_name,
+                    "berita_acara_markdown": md_name,
+                    "berita_acara_pdf": pdf_name,
+                },
+            },
+        }
+    except Exception as e:
+        task_status[task_id] = {"message": f"Error: {str(e)}", "progress": 100}
+
+@app.post("/full-process-async-base64")
+async def full_process_async_base64(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    task_id: str = Form(None)
+):
+    if not task_id:
+        task_id = str(uuid.uuid4())
+    audio_id = task_id
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    file_bytes = await file.read()
+    ext = os.path.splitext(file.filename)[1] or ".wav"
+    audio_path = os.path.join(AUDIO_DIR, f"{audio_id}{ext}")
+
+    with open(audio_path, "wb") as f:
+        f.write(file_bytes)
+
+    background_tasks.add_task(full_process_pipeline, task_id, audio_path, audio_id, timestamp)
+
+    return {"task_id": task_id, "message": "Processing started. Use /status/{task_id} to check progress."}
+
+@app.get("/status/{task_id}")
+def get_status(task_id: str):
+    status = task_status.get(task_id)
+    if not status:
+        return JSONResponse(content={"message": "Unknown task", "progress": 0}, status_code=404)
+    return status

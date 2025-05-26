@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Async Audio Processor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 2rem auto;
+        }
+        
+        input,
+        button {
+            padding: 0.5rem;
+            font-size: 1rem;
+        }
+        
+        #progressBar {
+            width: 100%;
+            background-color: #eee;
+            border-radius: 5px;
+            margin: 1rem 0;
+            position: relative;
+            color: #fff;
+            font-weight: bold;
+            text-align: center;
+            user-select: none;
+        }
+        
+        #progressBar>div {
+            height: 20px;
+            width: 0%;
+            background-color: #4caf50;
+            border-radius: 5px;
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        #files a {
+            display: block;
+            margin: 0.5rem 0;
+            color: #0066cc;
+            text-decoration: none;
+        }
+        
+        #pdfViewer {
+            margin-top: 1rem;
+            width: 100%;
+            height: 600px;
+            border: 1px solid #ccc;
+        }
+        
+        pre {
+            background: #f4f4f4;
+            border: 1px solid #ddd;
+            padding: 0.5rem;
+            max-height: 250px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        
+        h4 {
+            margin-top: 1.5rem;
+            margin-bottom: 0.5rem;
+            border-bottom: 1px solid #ccc;
+            padding-bottom: 0.2rem;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>Async Audio Processor</h1>
+
+    <label for="audioFile">Choose audio file:</label><br />
+    <input type="file" id="audioFile" accept="audio/*" /><br /><br />
+
+    <div id="audioPlayerContainer" style="display:none;">
+        <audio id="audioPlayer" controls></audio><br />
+        <button id="startProcessBtn">Start Full Process</button>
+    </div>
+
+    <div id="progressContainer" style="display:none;">
+        <div id="progressBar">
+            <div><span id="progressNumber">0%</span></div>
+        </div>
+        <p id="statusMessage">Waiting to start...</p>
+    </div>
+
+    <div id="files" style="display:none;">
+        <h3>Download Files:</h3>
+        <div id="downloadLinks"></div>
+
+        <h3>Berita Acara PDF Preview:</h3>
+        <iframe id="pdfViewer"></iframe>
+
+        <h4>Polished Transcript JSON Preview:</h4>
+        <pre id="polishedJsonPreview"></pre>
+
+        <h4>Pasal Markdown Preview:</h4>
+        <pre id="pasalMarkdownPreview"></pre>
+    </div>
+
+    <script>
+        let uploadedFile;
+        let taskId;
+
+        const audioFileInput = document.getElementById("audioFile");
+        const audioPlayerContainer = document.getElementById("audioPlayerContainer");
+        const audioPlayer = document.getElementById("audioPlayer");
+        const startProcessBtn = document.getElementById("startProcessBtn");
+        const progressContainer = document.getElementById("progressContainer");
+        const progressBar = document.querySelector("#progressBar > div");
+        const progressNumber = document.getElementById("progressNumber");
+        const statusMessage = document.getElementById("statusMessage");
+        const filesSection = document.getElementById("files");
+        const downloadLinks = document.getElementById("downloadLinks");
+        const pdfViewer = document.getElementById("pdfViewer");
+        const polishedJsonPreview = document.getElementById("polishedJsonPreview");
+        const pasalMarkdownPreview = document.getElementById("pasalMarkdownPreview");
+
+        // When file selected, show audio player and button
+        audioFileInput.addEventListener("change", () => {
+            if (audioFileInput.files.length === 0) return;
+            uploadedFile = audioFileInput.files[0];
+            const url = URL.createObjectURL(uploadedFile);
+            audioPlayer.src = url;
+            audioPlayerContainer.style.display = "block";
+            filesSection.style.display = "none";
+            progressContainer.style.display = "none";
+        });
+
+        // Upload audio and start processing
+        startProcessBtn.addEventListener("click", async() => {
+            if (!uploadedFile) return alert("Please select an audio file first.");
+
+            startProcessBtn.disabled = true;
+            statusMessage.textContent = "Uploading audio file...";
+            progressContainer.style.display = "block";
+            progressBar.style.width = "0%";
+            progressNumber.textContent = "0%";
+
+            // Step 1: Upload file to /full-process-async-base64
+            const formData = new FormData();
+            formData.append("file", uploadedFile);
+
+            try {
+                const uploadResp = await fetch("http://127.0.0.1:8000/full-process-async-base64", {
+                    method: "POST",
+                    body: formData
+                });
+                const uploadData = await uploadResp.json();
+                if (!uploadResp.ok) throw new Error(uploadData.message || "Upload failed");
+
+                taskId = uploadData.task_id;
+                statusMessage.textContent = "Upload successful. Task ID: " + taskId;
+
+                // Step 2: Poll for status every 3 seconds
+                pollStatus();
+            } catch (err) {
+                alert("Error: " + err.message);
+                startProcessBtn.disabled = false;
+                statusMessage.textContent = "Error uploading file.";
+            }
+        });
+
+        async function pollStatus() {
+            try {
+                const statusResp = await fetch(`http://127.0.0.1:8000/status/${taskId}`);
+                if (!statusResp.ok) throw new Error("Failed to get status");
+                const statusData = await statusResp.json();
+
+                statusMessage.textContent = statusData.message || "No status message";
+                const progressValue = statusData.progress || 0;
+                progressBar.style.width = progressValue + "%";
+                progressNumber.textContent = progressValue + "%";
+
+                if (progressValue < 100) {
+                    setTimeout(pollStatus, 3000);
+                } else {
+                    // Finished, display downloads and PDF preview
+                    displayResults(statusData.result);
+                    startProcessBtn.disabled = false;
+                }
+            } catch (err) {
+                statusMessage.textContent = "Error fetching status: " + err.message;
+                startProcessBtn.disabled = false;
+            }
+        }
+
+        function displayResults(result) {
+            if (!result) return;
+
+            downloadLinks.innerHTML = "";
+            polishedJsonPreview.textContent = "";
+            pasalMarkdownPreview.textContent = "";
+
+            // Show download buttons for saved files (assuming backend serves /download?file=filename)
+            const files = result.saved_files;
+            for (const key in files) {
+                const filename = files[key];
+                const a = document.createElement("a");
+                a.href = `http://127.0.0.1:8000/download?file=${encodeURIComponent(filename)}`;
+                a.textContent = `Download ${filename}`;
+                a.download = filename;
+                a.target = "_blank";
+                downloadLinks.appendChild(a);
+            }
+
+            // Show the base64 PDF inline
+            if (result.berita_acara_pdf_base64) {
+                const pdfDataUrl = "data:application/pdf;base64," + result.berita_acara_pdf_base64;
+                pdfViewer.src = pdfDataUrl;
+            }
+
+            // Show pretty JSON for polished transcript
+            if (result.polished_transcript) {
+                polishedJsonPreview.textContent = JSON.stringify(result.polished_transcript, null, 2);
+            }
+
+            // Show pasal markdown raw text
+            if (result.pasal_markdown) {
+                pasalMarkdownPreview.textContent = result.pasal_markdown;
+            }
+
+            filesSection.style.display = "block";
+        }
+    </script>
+
+</body>
+
+</html>
