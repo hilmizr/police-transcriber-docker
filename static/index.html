@@ -2,267 +2,171 @@
 <html lang="en">
 
 <head>
-    <meta charset="UTF-8">
-    <title>POLRI Transcriber Interface</title>
+    <meta charset="UTF-8" />
+    <title>POLRI Audio Transcription - Full Pipeline</title>
     <style>
         body {
             font-family: sans-serif;
             margin: 2rem;
+            max-width: 700px;
         }
         
-        textarea {
-            width: 100%;
-            height: 150px;
-            margin-top: 1rem;
-        }
-        
-        button {
+        button,
+        input[type="file"] {
             margin-top: 1rem;
             padding: 0.5rem 1rem;
+            font-size: 1rem;
+        }
+        
+        audio {
+            display: block;
+            margin-top: 1rem;
+            width: 100%;
+            outline: none;
+        }
+        
+        progress {
+            width: 100%;
+            height: 25px;
+            margin-top: 1rem;
+        }
+        
+        #progressMessage {
+            margin-top: 0.5rem;
+            font-weight: bold;
+        }
+        
+        #elapsedTime {
+            margin-top: 0.3rem;
+            font-style: italic;
+            color: #555;
+        }
+        
+        #downloadLink a {
+            display: inline-block;
+            margin-top: 1rem;
+            padding: 0.5rem 1rem;
+            background-color: #4caf50;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
         }
     </style>
 </head>
 
 <body>
-    <h1>🎙️ POLRI Audio Transcription</h1>
+    <h1>🎙️ POLRI Audio Transcription - Full Pipeline</h1>
 
-    <form id="uploadForm">
-        <label for="audioFile">Upload Audio (.wav):</label><br>
-        <input type="file" id="audioFile" name="file" accept=".wav" required><br>
-        <button type="submit">Transcribe</button>
-    </form>
+    <label for="audioFile">Upload Audio (.wav, .mp3, .m4a):</label><br />
+    <input type="file" id="audioFile" accept=".wav, .mp3, .m4a" />
 
-    <h2>🧾 Aligned Transcript</h2>
-    <textarea id="alignedOutput" placeholder="Transcription will appear here..."></textarea>
+    <audio id="audioPlayer" controls style="display:none;"></audio>
 
-    <button onclick="polish()">✨ Polish Transcript</button>
+    <button id="runPipelineBtn" disabled>Run Full Process 🔁</button>
 
-    <h2>📜 Polished Transcript</h2>
-    <textarea id="polishedOutput" placeholder="Polished output will appear here..."></textarea>
-
-    <button onclick="generateBerita()">📄 Generate Berita Acara</button>
-
-    <h2>⚖️ Prediksi Pasal Hukum</h2>
-    <textarea id="pasalOutput" placeholder="Hasil ekstraksi pasal akan muncul di sini..." style="height: 200px;"></textarea>
-    <br>
-    <button onclick="extractPasal()">⚖️ Ekstrak Pasal Hukum</button>
-
-    <h2>🧾 Berita Acara Markdown</h2>
-    <textarea id="beritaOutput" placeholder="Berita Acara will appear here..."></textarea>
-    <button onclick="downloadMarkdown()">⬇️ Download Markdown</button>
-    <button onclick="downloadPDF()">⬇️ Download PDF</button>
-
-    <h2>📦 Download ZIP</h2>
-    <button onclick="runFullProcess()">Run Full Pipeline 🔁</button>
-    <progress id="progressBar" value="0" max="100" style="width: 100%; height: 20px; margin-top: 1rem;"></progress>
-    <div id="progressMessage" style="margin-top: 0.5rem; font-weight: bold;"></div>
-    <div id="progress"></div>
-    <div id="elapsedTime" style="margin-top: 0.3rem; font-style: italic;"></div>
-
-
-
+    <progress id="progressBar" value="0" max="100"></progress>
+    <div id="progressMessage"></div>
+    <div id="elapsedTime"></div>
+    <div id="downloadLink"></div>
 
     <script>
-        const MODEL_NAME = "qwen/qwen3-235b-a22b";
-        let latestMdFile = "";
-        let latestPdfFile = "";
-        let alignedSegments = [];
+        const audioInput = document.getElementById("audioFile");
+        const audioPlayer = document.getElementById("audioPlayer");
+        const runBtn = document.getElementById("runPipelineBtn");
+        const progressBar = document.getElementById("progressBar");
+        const progressMessage = document.getElementById("progressMessage");
+        const elapsedTimeDiv = document.getElementById("elapsedTime");
+        const downloadDiv = document.getElementById("downloadLink");
 
-        document.getElementById("uploadForm").addEventListener("submit", async function(e) {
-            e.preventDefault();
-            const formData = new FormData();
-            formData.append("file", document.getElementById("audioFile").files[0]);
+        let taskId = null;
+        let intervalId = null;
+        let startTime = null;
 
-            const res = await fetch("/transcribe", {
-                method: "POST",
-                body: formData
-            });
-            const data = await res.json();
-            alignedSegments = data.aligned_segments;
-            document.getElementById("alignedOutput").value = JSON.stringify(alignedSegments, null, 2);
+        // When user selects a file, enable button and show audio player
+        audioInput.addEventListener("change", () => {
+            if (audioInput.files.length === 0) {
+                audioPlayer.style.display = "none";
+                runBtn.disabled = true;
+                return;
+            }
+            const file = audioInput.files[0];
+            const url = URL.createObjectURL(file);
+            audioPlayer.src = url;
+            audioPlayer.style.display = "block";
+            runBtn.disabled = false;
+
+            // Reset UI
+            progressBar.value = 0;
+            progressMessage.textContent = "";
+            elapsedTimeDiv.textContent = "";
+            downloadDiv.innerHTML = "";
+            if (intervalId) {
+                clearInterval(intervalId);
+            }
         });
 
+        runBtn.addEventListener("click", async() => {
+            if (audioInput.files.length === 0) {
+                alert("Please upload an audio file first.");
+                return;
+            }
 
-        async function polish() {
-            const aligned = JSON.parse(document.getElementById("alignedOutput").value);
+            runBtn.disabled = true;
+            progressBar.value = 0;
+            progressMessage.textContent = "⏳ Starting pipeline...";
+            elapsedTimeDiv.textContent = "Elapsed time: 0s";
+            downloadDiv.innerHTML = "";
 
-            const res = await fetch("/polish", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    model_name: MODEL_NAME,
-                    aligned_segments: aligned
-                })
-            });
-
-            const result = await res.json();
-            document.getElementById("polishedOutput").value = JSON.stringify(result.polished, null, 2);
-        }
-
-        async function generateBerita() {
-            let raw = document.getElementById("polishedOutput").value.trim();
-            let parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-            let polishedJSON = typeof parsed === "string" ? JSON.parse(parsed) : parsed;
-
-            const res = await fetch("/generate-berita-acara", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    model_name: MODEL_NAME,
-                    aligned_segments: polishedJSON
-                })
-            });
-
-            const result = await res.json();
-            const markdownContent = result.berita_acara;
-            document.getElementById("beritaOutput").value = markdownContent;
-
-            // ⬇️ Automatically save the files now
-            const saveRes = await fetch("/save-berita", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    model_name: MODEL_NAME,
-                    aligned_segments: polishedJSON
-                })
-            });
-
-            const files = await saveRes.json();
-            latestMdFile = files.markdown_file;
-            latestPdfFile = files.pdf_file;
-            alert("✅ Berita Acara berhasil disimpan. Silakan unduh Markdown atau PDF.");
-        }
-
-        async function downloadBerita() {
-            const polishedJSON = JSON.parse(document.getElementById("polishedOutput").value);
-
-            const res = await fetch("/save-berita", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    model_name: MODEL_NAME,
-                    aligned_segments: polishedJSON
-                })
-            });
-
-            const files = await res.json();
-            latestMdFile = files.markdown_file;
-            latestPdfFile = files.pdf_file;
-
-            alert("✅ Berita Acara berhasil disimpan. Silakan klik tombol download Markdown/PDF.");
-        }
-
-        function downloadMarkdown() {
-            if (!latestMdFile) return alert("❌ Belum ada file Markdown. Klik 'Generate' dulu.");
-            window.open("/download?file=" + encodeURIComponent(latestMdFile), "_blank");
-        }
-
-        function downloadPDF() {
-            if (!latestPdfFile) return alert("❌ Belum ada file PDF. Klik 'Generate' dulu.");
-            window.open("/download?file=" + encodeURIComponent(latestPdfFile), "_blank");
-        }
-
-        async function runFullProcess() {
-            const file = document.getElementById("audioFile").files[0];
+            const file = audioInput.files[0];
             const formData = new FormData();
             formData.append("file", file);
 
-            const startRes = await fetch("/full-process-async", {
-                method: "POST",
-                body: formData
-            });
-            const {
-                task_id
-            } = await startRes.json();
+            try {
+                const response = await fetch("/full-process-async", {
+                    method: "POST",
+                    body: formData,
+                });
 
-            const progressBar = document.getElementById("progressBar");
-            const progressMessage = document.getElementById("progressMessage");
-            const elapsedTimeDiv = document.getElementById("elapsedTime");
-            const progressDiv = document.getElementById("progress");
+                const data = await response.json();
+                taskId = data.task_id;
+                startTime = Date.now();
 
-            progressBar.value = 0;
-            progressMessage.innerText = "⏳ Starting pipeline...";
-            elapsedTimeDiv.innerText = "Elapsed time: 0s";
+                // Poll progress every 2 seconds
+                intervalId = setInterval(async() => {
+                    const statusRes = await fetch(`/status/${taskId}`);
+                    const status = await statusRes.json();
 
-            const startTime = Date.now();
+                    progressBar.value = status.progress || 0;
+                    progressMessage.textContent = status.message || "";
 
-            const interval = setInterval(async() => {
-                const res = await fetch(`/status/${task_id}`);
-                const {
-                    message,
-                    progress
-                } = await res.json();
+                    const elapsedMs = Date.now() - startTime;
+                    const seconds = Math.floor(elapsedMs / 1000);
+                    const minutes = Math.floor(seconds / 60);
+                    const remainingSeconds = seconds % 60;
+                    elapsedTimeDiv.textContent =
+                        minutes > 0 ?
+                        `Elapsed time: ${minutes}m ${remainingSeconds}s` :
+                        `Elapsed time: ${seconds}s`;
 
-                progressBar.value = progress || 0;
-                progressMessage.innerText = message || "";
+                    if (
+                        status.progress >= 100 ||
+                        status.message.startsWith("✅") ||
+                        status.message.startsWith("❌")
+                    ) {
+                        clearInterval(intervalId);
+                        runBtn.disabled = false;
 
-                // Calculate elapsed time
-                const elapsedMs = Date.now() - startTime;
-                const elapsedSeconds = Math.floor(elapsedMs / 1000);
-                const minutes = Math.floor(elapsedSeconds / 60);
-                const seconds = elapsedSeconds % 60;
-
-                elapsedTimeDiv.innerText = minutes > 0 ?
-                    `Elapsed time: ${minutes}m ${seconds}s` :
-                    `Elapsed time: ${seconds}s`;
-
-                if (progress >= 100 || message.startsWith("✅") || message.startsWith("❌")) {
-                    clearInterval(interval);
-
-                    if (message.startsWith("✅")) {
-                        const downloadLink = message.split(": ")[1];
-                        const a = document.createElement("a");
-                        a.href = downloadLink;
-                        a.innerText = "⬇️ Download ZIP";
-                        a.download = downloadLink.split("file=")[1];
-                        progressDiv.appendChild(document.createElement("br"));
-                        progressDiv.appendChild(a);
+                        if (status.message.startsWith("✅")) {
+                            const downloadLink = status.message.split(": ")[1];
+                            downloadDiv.innerHTML = `<a href="${downloadLink}" target="_blank" download>⬇️ Download ZIP Output</a>`;
+                        }
                     }
-                }
-            }, 2000);
-        }
-
-        async function extractPasal() {
-            const raw = document.getElementById("polishedOutput").value.trim();
-            const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-
-            const res = await fetch("/extract-pasal", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    model_name: MODEL_NAME,
-                    aligned_segments: parsed
-                })
-            });
-
-            const result = await res.json();
-            document.getElementById("pasalOutput").value = result.pasal_hukum;
-            if (result.markdown_file) {
-                const downloadBtn = document.createElement("button");
-                downloadBtn.innerText = "⬇️ Download Pasal Markdown";
-                downloadBtn.onclick = () => {
-                    window.open("/download?file=" + encodeURIComponent(result.markdown_file), "_blank");
-                };
-
-                // Only add if not already added
-                const pasalSection = document.getElementById("pasalOutput").parentNode;
-                if (!document.getElementById("pasalDownloadBtn")) {
-                    downloadBtn.id = "pasalDownloadBtn";
-                    pasalSection.appendChild(document.createElement("br"));
-                    pasalSection.appendChild(downloadBtn);
-                }
+                }, 2000);
+            } catch (error) {
+                runBtn.disabled = false;
+                progressMessage.textContent = `❌ Error: ${error.message}`;
             }
-        }
+        });
     </script>
 </body>
 
