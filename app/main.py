@@ -5,9 +5,9 @@ import zipfile
 import asyncio
 import logging
 from datetime import datetime
-from typing import Dict
-from fastapi import FastAPI, UploadFile, File, Query, Form
-from fastapi.responses import FileResponse
+from typing import Dict, List, Optional
+from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.services import (
     initialize_models,
@@ -16,14 +16,14 @@ from app.services import (
     enhance_with_llm,
     generate_berita_acara,
     extract_pasal_hukum,
+    summarize_berita_acara
 )
 from markdown_pdf import MarkdownPdf, Section
 from dotenv import load_dotenv
 import base64
+from pydantic import BaseModel
 
 load_dotenv()
-
-app = FastAPI()
 
 # ===== APPLY CORS MIDDLEWARE =====
 from fastapi.middleware.cors import CORSMiddleware
@@ -46,6 +46,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+SUMMARY_DIR = "summary_output"
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -56,6 +57,7 @@ AUDIO_DIR = os.getenv("AUDIO_DIR", "audio_sample")
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 os.makedirs(AUDIO_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(SUMMARY_DIR, exist_ok=True)
 
 # Static UI path setup
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -81,91 +83,6 @@ def serve_ui():
 
 # Initialize models once on startup
 asr_model, diarization_pipeline = initialize_models()
-
-@app.get("/download")
-def download_file(file: str = Query(...)):
-    file_path = os.path.join(OUTPUT_DIR, file)
-    return FileResponse(file_path, media_type="application/octet-stream", filename=os.path.basename(file_path))
-
-@app.post("/full-process-async")
-async def full_process_async(file: UploadFile = File(...)):
-    task_id = str(uuid.uuid4())
-    audio_id = str(uuid.uuid4())
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    task_status[task_id] = {"message": "📤 Uploading file...", "progress": 5}
-
-    file_bytes = await file.read()
-    ext = os.path.splitext(file.filename)[1] or ".wav"
-    audio_path = os.path.join(AUDIO_DIR, f"{audio_id}{ext}")
-
-    async def background_task():
-        try:
-            # Save audio file
-            with open(audio_path, "wb") as f:
-                f.write(file_bytes)
-
-            task_status[task_id] = {"message": "📝 Transcribing + diarizing...", "progress": 25}
-            transcript, diarization = process_audio(audio_path, asr_model, diarization_pipeline)
-            aligned = align_segments(transcript, diarization)
-
-            task_status[task_id] = {"message": "✨ Polishing with LLM...", "progress": 50}
-            polished = enhance_with_llm(aligned, model_name)
-
-            task_status[task_id] = {"message": "📄 Extracting Pasal Hukum...", "progress": 70}
-            pasal = extract_pasal_hukum(polished, model_name)
-
-            # Save pasal markdown
-            pasal_md_name = f"{audio_id}_{timestamp}_pasal.md"
-            pasal_md_path = os.path.join(OUTPUT_DIR, pasal_md_name)
-            with open(pasal_md_path, "w", encoding="utf-8") as f:
-                f.write(pasal)
-
-            task_status[task_id] = {"message": "📄 Generating Berita Acara...", "progress": 80}
-            berita_acara_markdown = generate_berita_acara(polished, model_name, pasal)
-
-            # Save Berita Acara markdown and PDF
-            md_name = f"{audio_id}_{timestamp}_berita_acara.md"
-            pdf_name = f"{audio_id}_{timestamp}_berita_acara.pdf"
-            md_path = os.path.join(OUTPUT_DIR, md_name)
-            pdf_path = os.path.join(OUTPUT_DIR, pdf_name)
-
-            with open(md_path, "w", encoding="utf-8") as f:
-                f.write(berita_acara_markdown)
-
-            pdf = MarkdownPdf(toc_level=2)
-            pdf.add_section(Section(berita_acara_markdown))
-            pdf.meta["title"] = "Berita Acara Gelar Perkara"
-            pdf.save(pdf_path)
-
-            task_status[task_id] = {"message": "📦 Zipping output files...", "progress": 90}
-            zip_name = f"{audio_id}_{timestamp}_output.zip"
-            zip_path = os.path.join(OUTPUT_DIR, zip_name)
-
-            with zipfile.ZipFile(zip_path, "w") as zipf:
-                diarization_data = [
-                    {"speaker": spk, "start": turn.start, "end": turn.end}
-                    for turn, _, spk in diarization.itertracks(yield_label=True)
-                ]
-                zipf.writestr(f"{audio_id}_{timestamp}_polished.json", json.dumps(polished, ensure_ascii=False, indent=2))
-                zipf.write(pasal_md_path, arcname=pasal_md_name)
-                zipf.write(md_path, arcname=md_name)
-                zipf.write(pdf_path, arcname=pdf_name)
-
-            task_status[task_id] = {"message": f"✅ Completed: /download?file={zip_name}", "progress": 100}
-        except Exception as e:
-            logger.error(f"❌ Error in background task: {e}")
-            task_status[task_id] = {"message": f"❌ Error: {e}", "progress": 100}
-
-    asyncio.create_task(background_task())
-    return {"task_id": task_id}
-
-@app.get("/status/{task_id}")
-def get_status(task_id: str):
-    status = task_status.get(task_id)
-    if status is None:
-        return {"message": "❓ Unknown task", "progress": 0}
-    return status
 
 # === ADDED FULL PROCESS SYNC FOR POSTMAN TESTING ===
 
@@ -311,63 +228,28 @@ async def full_process_sync_v2(
         },
     }
 
-# === ADDED SUMMARIZE CASE ===
+# ===== ASYNC IMPLEMENTATION =====
 
-from typing import List
-from fastapi import UploadFile, File
-from app.services import summarize_berita_acara
+# Separate global task status dictionaries
+full_process_task_status = {}
+summarize_task_status = {}
 
-@app.post("/summarize-case")
-async def summarize_case(files: List[UploadFile] = File(...)):
-    # Read markdown content
-    markdowns = []
-    for f in files:
-        raw = await f.read()
-        markdowns.append(raw.decode("utf-8"))
-
-    # Summarize via your service
-    result = summarize_berita_acara(markdowns, model_name)
-
-    # Optionally persist the summaries:
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    txt_name = f"case_summary_{timestamp}.txt"
-    md_name  = f"case_summary_{timestamp}.md"
-    with open(os.path.join(OUTPUT_DIR, txt_name), "w", encoding="utf-8") as t:
-        t.write(result["summary_text"])
-    with open(os.path.join(OUTPUT_DIR, md_name), "w", encoding="utf-8") as m:
-        m.write(result["summary_markdown"])
-
-    return {
-        **result,
-        "saved_files": {"text": txt_name, "markdown": md_name},
-        "download_prefix": "/download?file="
-    }
-# ===== ASYNC =====
-from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks
-from fastapi.responses import JSONResponse
-import uuid
-import os
-import json
-import base64
-from datetime import datetime
-from markdown_pdf import MarkdownPdf, Section
-
-task_status = {}
+# ===== ASYNC FULL PROCESS PIPELINE =====
 
 def full_process_pipeline(task_id: str, audio_path: str, audio_id: str, timestamp: str):
     try:
-        task_status[task_id] = {"message": "Starting processing...", "progress": 5}
+        full_process_task_status[task_id] = {"message": "Starting processing...", "progress": 5}
 
         transcript, diarization = process_audio(audio_path, asr_model, diarization_pipeline)
-        task_status[task_id] = {"message": "Aligning segments...", "progress": 25}
+        full_process_task_status[task_id] = {"message": "Aligning segments...", "progress": 25}
 
         aligned = align_segments(transcript, diarization)
         polished = enhance_with_llm(aligned, model_name)
-        task_status[task_id] = {"message": "Extracting Pasal Hukum...", "progress": 50}
+        full_process_task_status[task_id] = {"message": "Extracting Pasal Hukum...", "progress": 50}
 
         pasal = extract_pasal_hukum(polished, model_name)
         berita_acara_markdown = generate_berita_acara(polished, model_name, pasal)
-        task_status[task_id] = {"message": "Generating PDF...", "progress": 70}
+        full_process_task_status[task_id] = {"message": "Generating PDF...", "progress": 70}
 
         # Save files
         polished_json_name = f"{audio_id}_{timestamp}_polished.json"
@@ -396,7 +278,7 @@ def full_process_pipeline(task_id: str, audio_path: str, audio_id: str, timestam
             pdf_bytes = f.read()
         pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
 
-        task_status[task_id] = {
+        full_process_task_status[task_id] = {
             "message": "Completed",
             "progress": 100,
             "result": {
@@ -413,7 +295,8 @@ def full_process_pipeline(task_id: str, audio_path: str, audio_id: str, timestam
             },
         }
     except Exception as e:
-        task_status[task_id] = {"message": f"Error: {str(e)}", "progress": 100}
+        full_process_task_status[task_id] = {"message": f"Error: {str(e)}", "progress": 100}
+
 
 @app.post("/full-process-async-base64")
 async def full_process_async_base64(
@@ -428,18 +311,93 @@ async def full_process_async_base64(
 
     file_bytes = await file.read()
     ext = os.path.splitext(file.filename)[1] or ".wav"
-    audio_path = os.path.join(AUDIO_DIR, f"{audio_id}{ext}")
+    audio_path = os.path.join(OUTPUT_DIR, f"{audio_id}{ext}")
 
     with open(audio_path, "wb") as f:
         f.write(file_bytes)
 
     background_tasks.add_task(full_process_pipeline, task_id, audio_path, audio_id, timestamp)
 
-    return {"task_id": task_id, "message": "Processing started. Use /status/{task_id} to check progress."}
+    return {"task_id": task_id, "message": "Processing started. Use /status/full-process/{task_id} to check progress."}
 
-@app.get("/status/{task_id}")
-def get_status(task_id: str):
-    status = task_status.get(task_id)
+
+@app.get("/status/full-process/{task_id}")
+def get_full_process_status(task_id: str):
+    status = full_process_task_status.get(task_id)
     if not status:
         return JSONResponse(content={"message": "Unknown task", "progress": 0}, status_code=404)
+    return status
+
+
+# ===== ASYNC SUMMARIZATION =====
+
+class MarkdownItem(BaseModel):
+    task_id: str
+    content: str
+
+class SummarizeRequest(BaseModel):
+    case_id: Optional[str] = None
+    markdowns: List[MarkdownItem]
+    model_name: Optional[str] = None
+
+def summary_background_task(task_id: str, case_id: Optional[str], markdowns: List[str], model_name: str):
+    try:
+        summarize_task_status[task_id] = {"message": "Starting summary...", "progress": 5}
+        
+        # Call your existing LLM summarization function with the list of markdown texts
+        summary_result = summarize_berita_acara(markdowns, model_name)
+
+        summarize_task_status[task_id] = {"message": "Saving summary files...", "progress": 90}
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        prefix = case_id if case_id else task_id
+
+        # Save plain text summary
+        txt_filename = f"{prefix}_{timestamp}_summary.txt"
+        txt_path = os.path.join(SUMMARY_DIR, txt_filename)
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write(summary_result["summary_text"])
+
+        # Save markdown summary
+        md_filename = f"{prefix}_{timestamp}_summary.md"
+        md_path = os.path.join(SUMMARY_DIR, md_filename)
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(summary_result["summary_markdown"])
+
+        summarize_task_status[task_id] = {
+            "message": "Completed",
+            "progress": 100,
+            "result": {
+                "summary_text": summary_result["summary_text"],
+                "summary_markdown": summary_result["summary_markdown"],
+                "saved_files": {
+                    "summary_text": txt_filename,
+                    "summary_markdown": md_filename
+                }
+            }
+        }
+    except Exception as e:
+        summarize_task_status[task_id] = {"message": f"Error: {str(e)}", "progress": 100}
+
+
+@app.post("/summarize-case-async")
+async def summarize_case_async(req: SummarizeRequest, background_tasks: BackgroundTasks):
+    if not req.markdowns or len(req.markdowns) == 0:
+        raise HTTPException(status_code=400, detail="No markdowns provided")
+
+    task_id = str(uuid.uuid4())
+
+    markdown_texts = [item.content for item in req.markdowns]
+    model = req.model_name or model_name
+
+    background_tasks.add_task(summary_background_task, task_id, req.case_id, markdown_texts, model)
+
+    return {"task_id": task_id, "message": "Summary job started. Use /status/summarize/{task_id} to check progress."}
+
+
+@app.get("/status/summarize/{task_id}")
+def get_summarize_status(task_id: str):
+    status = summarize_task_status.get(task_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Unknown task_id")
     return status

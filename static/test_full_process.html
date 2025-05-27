@@ -172,7 +172,7 @@
 
         async function pollStatus() {
             try {
-                const statusResp = await fetch(`http://127.0.0.1:8000/status/${taskId}`);
+                const statusResp = await fetch(`http://127.0.0.1:8000/status/full-process/${taskId}`);
                 if (!statusResp.ok) throw new Error("Failed to get status");
                 const statusData = await statusResp.json();
 
