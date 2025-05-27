@@ -235,11 +235,11 @@ async def full_process_sync_v2(
 full_process_task_status = {}
 summarize_task_status = {}
 
-# ===== ASYNC FULL PROCESS PIPELINE =====
-
+# ===== constants =====
 LARAVEL_ENDPOINT_CATATAN = "http://206.189.159.94:8000/api/callback/catatan"
 
-def full_process_pipeline(task_id: str, audio_path: str, audio_id: str, timestamp: str):
+# ===== ASYNC FULL PROCESS PIPELINE =====
+def full_process_pipeline(task_id: str, audio_path: str, timestamp: str):   # <- audio_id removed
     try:
         full_process_task_status[task_id] = {"message": "Starting processing...", "progress": 5}
 
@@ -254,23 +254,23 @@ def full_process_pipeline(task_id: str, audio_path: str, audio_id: str, timestam
         berita_acara_markdown = generate_berita_acara(polished, model_name, pasal)
         full_process_task_status[task_id] = {"message": "Generating PDF...", "progress": 70}
 
-        # Save files
-        polished_json_name = f"{audio_id}_{timestamp}_polished.json"
+        # ---------- save artefacts ----------
+        polished_json_name = f"{task_id}_{timestamp}_polished.json"
         polished_json_path = os.path.join(OUTPUT_DIR, polished_json_name)
         with open(polished_json_path, "w", encoding="utf-8") as f:
             json.dump(polished, f, ensure_ascii=False, indent=2)
 
-        pasal_md_name = f"{audio_id}_{timestamp}_pasal.md"
+        pasal_md_name = f"{task_id}_{timestamp}_pasal.md"
         pasal_md_path = os.path.join(OUTPUT_DIR, pasal_md_name)
         with open(pasal_md_path, "w", encoding="utf-8") as f:
             f.write(pasal)
 
-        md_name = f"{audio_id}_{timestamp}_berita_acara.md"
+        md_name = f"{task_id}_{timestamp}_berita_acara.md"
         md_path = os.path.join(OUTPUT_DIR, md_name)
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(berita_acara_markdown)
 
-        pdf_name = f"{audio_id}_{timestamp}_berita_acara.pdf"
+        pdf_name = f"{task_id}_{timestamp}_berita_acara.pdf"
         pdf_path = os.path.join(OUTPUT_DIR, pdf_name)
         pdf = MarkdownPdf(toc_level=2)
         pdf.add_section(Section(berita_acara_markdown))
@@ -278,18 +278,14 @@ def full_process_pipeline(task_id: str, audio_path: str, audio_id: str, timestam
         pdf.save(pdf_path)
 
         with open(pdf_path, "rb") as f:
-            pdf_bytes = f.read()
-        pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
-        
-        # ------------------------------------------------------------------
-        # 🔗  POST result to Laravel /callback/catatan
-        # ------------------------------------------------------------------
+            pdf_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+        # ---------- POST to Laravel ----------
         payload = {
             "task_id": task_id,
-            "audio_id": audio_id,
-            "pasal_markdown": pasal,                      
+            "pasal_markdown": pasal,
             "berita_acara_markdown": berita_acara_markdown,
-            "berita_acara_pdf_base64": pdf_b64,            
+            "berita_acara_pdf_base64": pdf_b64,
             "polished_transcript": polished,
             "saved_files": {
                 "polished_json": polished_json_name,
@@ -298,58 +294,50 @@ def full_process_pipeline(task_id: str, audio_path: str, audio_id: str, timestam
                 "berita_acara_pdf": pdf_name,
             },
         }
-
-        logging.info(f"Posting catatan payload to Laravel endpoint: {LARAVEL_ENDPOINT_CATATAN}")
+        logging.info("Posting catatan payload to Laravel endpoint: %s", LARAVEL_ENDPOINT_CATATAN)
         try:
             resp = requests.post(LARAVEL_ENDPOINT_CATATAN, json=payload, timeout=10)
             logging.info("Laravel responded with %s", resp.status_code)
         except Exception as e:
             logging.error("Failed to post to Laravel endpoint: %s", e)
 
+        # ---------- final task status ----------
         full_process_task_status[task_id] = {
             "message": "Completed",
             "progress": 100,
-            "result": {
-                "polished_transcript": polished,
-                "pasal_markdown": pasal,
-                "berita_acara_markdown": berita_acara_markdown,
-                "berita_acara_pdf_base64": pdf_b64,
-                "saved_files": {
-                    "polished_json": polished_json_name,
-                    "pasal_markdown": pasal_md_name,
-                    "berita_acara_markdown": md_name,
-                    "berita_acara_pdf": pdf_name,
-                },
-            },
+            "result": payload,   # same dict we just sent
         }
-        
-        
+
     except Exception as e:
         full_process_task_status[task_id] = {"message": f"Error: {str(e)}", "progress": 100}
 
 
+# ===== ROUTE =====
 @app.post("/full-process-async-base64")
 async def full_process_async_base64(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    task_id: str = Form(None)
+    task_id: str = Form(None),
 ):
     if not task_id:
         task_id = str(uuid.uuid4())
-    audio_id = task_id
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     file_bytes = await file.read()
     ext = os.path.splitext(file.filename)[1] or ".wav"
-    audio_path = os.path.join(OUTPUT_DIR, f"{audio_id}{ext}")
+    audio_path = os.path.join(OUTPUT_DIR, f"{task_id}{ext}")
 
     with open(audio_path, "wb") as f:
         f.write(file_bytes)
 
-    background_tasks.add_task(full_process_pipeline, task_id, audio_path, audio_id, timestamp)
+    # only three args now: task_id, audio_path, timestamp
+    background_tasks.add_task(full_process_pipeline, task_id, audio_path, timestamp)
 
-    return {"task_id": task_id, "message": "Processing started. Use /status/full-process/{task_id} to check progress."}
-
+    return {
+        "task_id": task_id,
+        "message": "Processing started. Use /status/full-process/{task_id} to check progress.",
+    }
 
 @app.get("/status/full-process/{task_id}")
 def get_full_process_status(task_id: str):

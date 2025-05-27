@@ -17,21 +17,16 @@ OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 os.makedirs(os.environ["WHISPER_CACHE"], exist_ok=True)
 
 # Initialize models once
-
-
 def initialize_models(model_type="tiny"):
-    # Use environment-aware download root for Whisper
     whisper_cache_dir = os.environ.get("WHISPER_CACHE", "./cache/whisper")
-    asr_model = whisper.load_model(model_type, download_root=whisper_cache_dir)
-    asr_model = asr_model.to("cuda" if torch.cuda.is_available() else "cpu")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    asr_model = whisper.load_model(model_type, device=device, download_root=whisper_cache_dir)
 
-    # Hugging Face pyannote pipeline
     diarization_pipeline = Pipeline.from_pretrained(
         "pyannote/speaker-diarization-3.1",
         use_auth_token=os.environ["HUGGINGFACE_HUB_TOKEN"]
     )
     return asr_model, diarization_pipeline
-
 
 def process_audio(audio_path, asr_model, diarization_pipeline):
     transcript = asr_model.transcribe(
