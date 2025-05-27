@@ -250,16 +250,13 @@ def summarize_berita_acara(markdowns: list[str], model_name: str) -> dict:
         ("system", """
             Anda adalah asisten AI yang ahli dalam merangkum dokumen resmi gelar perkara.
             Anda akan menerima beberapa Berita Acara (Markdown) terpisah.
-            Buat dua output:
-            1. summary_text: ringkasan eksekutif singkat (1–2 paragraf) dalam teks biasa.
-            2. summary_markdown: ringkasan formal dalam Markdown (gunakan heading, daftar, dll.).
+            Buat ringkasan formal dalam Markdown (gunakan heading, daftar, dll.).
 
             **PENTING**: Hanya kembalikan output dalam bentuk JSON yang valid tanpa penjelasan tambahan, tanpa teks lain, tanpa kode markdown, hanya JSON murni.
 
             Format JSON:
             {{
-            "summary_text": "...",
-            "summary_markdown": "..."
+                "summary_markdown": "..."
             }}
             """),
         ("user", "{input}")
@@ -272,3 +269,5 @@ def summarize_berita_acara(markdowns: list[str], model_name: str) -> dict:
         return json.loads(result.content)
     except json.JSONDecodeError:
         raise RuntimeError("Gagal parse JSON dari LLM.")
+
+

@@ -23,6 +23,7 @@ from markdown_pdf import MarkdownPdf, Section
 from dotenv import load_dotenv
 import base64
 from pydantic import BaseModel
+import requests 
 
 load_dotenv()
 
@@ -295,6 +296,8 @@ def full_process_pipeline(task_id: str, audio_path: str, audio_id: str, timestam
                 },
             },
         }
+        
+        
     except Exception as e:
         full_process_task_status[task_id] = {"message": f"Error: {str(e)}", "progress": 100}
 
@@ -332,11 +335,12 @@ def get_full_process_status(task_id: str):
 
 # ===== ASYNC SUMMARIZATION =====
 
+LARAVEL_ENDPOINT = "http://206.189.159.94:8000/api/callback"  # change as needed
+
 def summary_background_task(task_id: str, case_id: Optional[str], markdowns: List[str], model_name: str):
     try:
         summarize_task_status[task_id] = {"case_id": case_id, "message": "Starting summary...", "progress": 5}
-        
-        # Call your existing LLM summarization function with the list of markdown texts
+
         summary_result = summarize_berita_acara(markdowns, model_name)
 
         summarize_task_status[task_id].update({"message": "Saving summary files...", "progress": 90})
@@ -344,13 +348,7 @@ def summary_background_task(task_id: str, case_id: Optional[str], markdowns: Lis
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         prefix = case_id if case_id else task_id
 
-        # Save plain text summary
-        txt_filename = f"{prefix}_{timestamp}_summary.txt"
-        txt_path = os.path.join(SUMMARY_DIR, txt_filename)
-        with open(txt_path, "w", encoding="utf-8") as f:
-            f.write(summary_result["summary_text"])
-
-        # Save markdown summary
+        # Save markdown summary only
         md_filename = f"{prefix}_{timestamp}_summary.md"
         md_path = os.path.join(SUMMARY_DIR, md_filename)
         with open(md_path, "w", encoding="utf-8") as f:
@@ -360,14 +358,31 @@ def summary_background_task(task_id: str, case_id: Optional[str], markdowns: Lis
             "message": "Completed",
             "progress": 100,
             "result": {
-                "summary_text": summary_result["summary_text"],
                 "summary_markdown": summary_result["summary_markdown"],
                 "saved_files": {
-                    "summary_text": txt_filename,
                     "summary_markdown": md_filename
                 }
             }
         })
+
+        # Prepare payload to send to Laravel backend (without summary_text)
+        # payload = {
+        #     "task_id": task_id,
+        #     "case_id": case_id,
+        #     "summary_markdown": summary_result["summary_markdown"],
+        #     "saved_files": {
+        #         "summary_markdown": md_filename
+        #     }
+        # }
+
+        # logging.info(f"Posting summary payload to Laravel endpoint: {LARAVEL_ENDPOINT}")
+        # try:
+        #     response = requests.post(LARAVEL_ENDPOINT, json=payload, timeout=10)
+        #     response.raise_for_status()
+        #     logging.info(f"Laravel endpoint responded with status: {response.status_code}")
+        # except Exception as e:
+        #     logging.error(f"Failed to post to Laravel endpoint: {e}")
+
     except Exception as e:
         summarize_task_status[task_id] = {"case_id": case_id, "message": f"Error: {str(e)}", "progress": 100}
 

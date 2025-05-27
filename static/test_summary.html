@@ -236,14 +236,13 @@
                 if (prog < 100) {
                     pollTimeout = setTimeout(pollStatus, 3000);
                 } else {
-                    // Only show result if no error in message
                     if (data.message && data.message.toLowerCase().includes('error')) {
                         jsonResponsePre.textContent = '';
                         summaryMarkdownDiv.textContent = '';
                         downloadLinksDiv.innerHTML = '';
                     } else if (data.result) {
                         jsonResponsePre.textContent = JSON.stringify(data.result, null, 2);
-                        summaryMarkdownDiv.innerHTML = marked.parse(data.result.summary_markdown || '');
+                        summaryMarkdownDiv.innerHTML = marked.parse(data.result.summary_markdown || '_No summary generated_');
                         downloadLinksDiv.innerHTML = '';
 
                         const sf = data.result.saved_files || {};
@@ -258,6 +257,7 @@
                     }
                     startBtn.disabled = false;
                 }
+
             } catch (e) {
                 statusMessage.textContent = 'Error fetching status: ' + e.message;
                 startBtn.disabled = false;
