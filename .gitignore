@@ -10,3 +10,4 @@ hf_transformers/
 
 # Ignore all output files
 output/
+summary_output/

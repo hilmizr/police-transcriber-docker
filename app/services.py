@@ -18,6 +18,8 @@ OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 os.makedirs(os.environ["WHISPER_CACHE"], exist_ok=True)
 
 # Initialize models once
+
+
 def initialize_models(model_type="tiny"):
     # Use environment-aware download root for Whisper
     whisper_cache_dir = os.environ.get("WHISPER_CACHE", "./cache/whisper")
@@ -30,6 +32,7 @@ def initialize_models(model_type="tiny"):
         use_auth_token=os.environ["HUGGINGFACE_HUB_TOKEN"]
     )
     return asr_model, diarization_pipeline
+
 
 def process_audio(audio_path, asr_model, diarization_pipeline):
     transcript = asr_model.transcribe(
@@ -47,6 +50,7 @@ def process_audio(audio_path, asr_model, diarization_pipeline):
         diarization = diarization_pipeline(audio_path, hook=hook)
     return transcript, diarization
 
+
 def align_segments(transcript: dict, diarization) -> list:
     aligned = []
     for seg in transcript.get("segments", []):
@@ -57,9 +61,12 @@ def align_segments(transcript: dict, diarization) -> list:
             for turn, _, spk in diarization.itertracks(yield_label=True)
             if turn.start < end and turn.end > start
         ]
-        speaker = max(candidates, key=lambda x: x[0])[1] if candidates else "Unknown"
-        aligned.append({"speaker": speaker, "start": start, "end": end, "text": text})
+        speaker = max(candidates, key=lambda x: x[0])[
+            1] if candidates else "Unknown"
+        aligned.append({"speaker": speaker, "start": start,
+                       "end": end, "text": text})
     return aligned
+
 
 class ChatOpenRouter(ChatOpenAI):
     openai_api_base: str
@@ -67,7 +74,9 @@ class ChatOpenRouter(ChatOpenAI):
     model_name: str
 
     def __init__(self, model_name: str, openai_api_key: str = os.environ["OPENROUTER_API_KEY"], openai_api_base: str = "https://openrouter.ai/api/v1", **kwargs):
-        super().__init__(openai_api_base=openai_api_base, openai_api_key=openai_api_key, model_name=model_name, **kwargs)
+        super().__init__(openai_api_base=openai_api_base,
+                         openai_api_key=openai_api_key, model_name=model_name, **kwargs)
+
 
 def enhance_with_llm(aligned_output: list, model_name: str) -> str:
     input_json = json.dumps(aligned_output, ensure_ascii=False)
@@ -110,7 +119,8 @@ Jangan sertakan penjelasan tambahan, markdown, atau narasi apa pun — hanya JSO
         ("user", "{input}")
     ])
 
-    llm = ChatOpenRouter(model_name=model_name, temperature=0, max_tokens=16000)
+    llm = ChatOpenRouter(model_name=model_name,
+                         temperature=0, max_tokens=16000)
     chain = prompt | llm
     result = chain.invoke({"input": input_json})
     try:
@@ -123,6 +133,7 @@ Jangan sertakan penjelasan tambahan, markdown, atau narasi apa pun — hanya JSO
 def generate_nomor_berita_acara():
     return f"BA-{datetime.now().year}-{random.randint(1000, 9999)}"
 
+
 def format_tanggal_formal(dt):
     bulan = {
         1: "Januari", 2: "Februari", 3: "Maret", 4: "April", 5: "Mei", 6: "Juni",
@@ -130,10 +141,12 @@ def format_tanggal_formal(dt):
     }
     return f"{dt.day} {bulan[dt.month]} {dt.year}"
 
+
 def generate_berita_acara(aligned_segments: list, model_name: str, pasal_list: str = "") -> str:
     nomor = generate_nomor_berita_acara()
     tanggal = format_tanggal_formal(datetime.now())
-    formatted_input = "\n".join([f"{seg['speaker']}: {seg['text']}" for seg in aligned_segments])
+    formatted_input = "\n".join(
+        [f"{seg['speaker']}: {seg['text']}" for seg in aligned_segments])
 
     berita_acara_prompt = ChatPromptTemplate.from_messages([
         ("system", f"""
@@ -169,7 +182,8 @@ Catatan penting:
         ("user", "{input}")
     ])
 
-    llm = ChatOpenRouter(model_name=model_name, temperature=0.3, max_tokens=4000)
+    llm = ChatOpenRouter(model_name=model_name,
+                         temperature=0.3, max_tokens=4000)
     chain = berita_acara_prompt.partial(
         nomor_berita_acara=nomor,
         tanggal=tanggal,
@@ -177,6 +191,7 @@ Catatan penting:
     ) | llm
     result = chain.invoke({"input": formatted_input})
     return result.content
+
 
 def export_markdown_and_pdf(content: str, md_path: str, pdf_path: str):
     output_dir = os.path.dirname(md_path)
@@ -196,7 +211,6 @@ def export_markdown_and_pdf(content: str, md_path: str, pdf_path: str):
 
 # ==============================================================================
 
-from langchain.prompts import ChatPromptTemplate
 
 pasal_prompt = ChatPromptTemplate.from_messages([
     ("system", """
@@ -217,12 +231,14 @@ Beri narasi dan penjelasan tambahan
     ("user", "{input}")
 ])
 
+
 def extract_pasal_hukum(aligned_segments: list, model_name: str) -> str:
     combined_transcript = "\n".join(
         f"{seg['speaker']}: {seg['text']}" for seg in aligned_segments
     )
 
-    llm = ChatOpenRouter(model_name=model_name, temperature=0.2, max_tokens=4000)
+    llm = ChatOpenRouter(model_name=model_name,
+                         temperature=0.2, max_tokens=4000)
     chain = pasal_prompt | llm
     result = chain.invoke({"input": combined_transcript})
     return result.content
@@ -230,26 +246,27 @@ def extract_pasal_hukum(aligned_segments: list, model_name: str) -> str:
 # === ADDED SUMMARIZE CASE ===
 
 def summarize_berita_acara(markdowns: list[str], model_name: str) -> dict:
-    # 1. Join them into one prompt
     joined = "\n\n---\n\n".join(markdowns)
     prompt = ChatPromptTemplate.from_messages([
         ("system", """
-Anda adalah asisten AI yang ahli dalam merangkum dokumen resmi gelar perkara.
-Anda akan menerima beberapa Berita Acara (Markdown) terpisah.
-Buat dua output:
-1. summary_text: ringkasan eksekutif singkat (1–2 paragraf) dalam teks biasa.
-2. summary_markdown: ringkasan formal dalam Markdown (gunakan heading, daftar, dll.).
+            Anda adalah asisten AI yang ahli dalam merangkum dokumen resmi gelar perkara.
+            Anda akan menerima beberapa Berita Acara (Markdown) terpisah.
+            Buat dua output:
+            1. summary_text: ringkasan eksekutif singkat (1–2 paragraf) dalam teks biasa.
+            2. summary_markdown: ringkasan formal dalam Markdown (gunakan heading, daftar, dll.).
 
-Kembalikan sebagai JSON:
-{
-  "summary_text": "...",
-  "summary_markdown": "## Ringkasan Persidangan\n- …"
-}
-"""),
+            **PENTING**: Hanya kembalikan output dalam bentuk JSON yang valid tanpa penjelasan tambahan, tanpa teks lain, tanpa kode markdown, hanya JSON murni.
+
+            Format JSON:
+            {{
+            "summary_text": "...",
+            "summary_markdown": "..."
+            }}
+            """),
         ("user", "{input}")
     ])
-
-    llm = ChatOpenRouter(model_name=model_name, temperature=0.3, max_tokens=16000)
+    llm = ChatOpenRouter(model_name=model_name,
+                         temperature=0.3, max_tokens=16000)
     chain = prompt | llm
     result = chain.invoke({"input": joined})
     try:

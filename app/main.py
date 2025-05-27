@@ -331,23 +331,24 @@ def get_full_process_status(task_id: str):
 
 # ===== ASYNC SUMMARIZATION =====
 
-class MarkdownItem(BaseModel):
-    task_id: str
+class MarkdownDocument(BaseModel):
+    doc_id: str  
     content: str
 
 class SummarizeRequest(BaseModel):
-    case_id: Optional[str] = None
-    markdowns: List[MarkdownItem]
+    case_id: Optional[str] = None 
+    markdowns: List[MarkdownDocument]
     model_name: Optional[str] = None
+
 
 def summary_background_task(task_id: str, case_id: Optional[str], markdowns: List[str], model_name: str):
     try:
-        summarize_task_status[task_id] = {"message": "Starting summary...", "progress": 5}
+        summarize_task_status[task_id] = {"case_id": case_id, "message": "Starting summary...", "progress": 5}
         
         # Call your existing LLM summarization function with the list of markdown texts
         summary_result = summarize_berita_acara(markdowns, model_name)
 
-        summarize_task_status[task_id] = {"message": "Saving summary files...", "progress": 90}
+        summarize_task_status[task_id].update({"message": "Saving summary files...", "progress": 90})
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         prefix = case_id if case_id else task_id
@@ -364,7 +365,7 @@ def summary_background_task(task_id: str, case_id: Optional[str], markdowns: Lis
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(summary_result["summary_markdown"])
 
-        summarize_task_status[task_id] = {
+        summarize_task_status[task_id].update({
             "message": "Completed",
             "progress": 100,
             "result": {
@@ -375,9 +376,9 @@ def summary_background_task(task_id: str, case_id: Optional[str], markdowns: Lis
                     "summary_markdown": md_filename
                 }
             }
-        }
+        })
     except Exception as e:
-        summarize_task_status[task_id] = {"message": f"Error: {str(e)}", "progress": 100}
+        summarize_task_status[task_id] = {"case_id": case_id, "message": f"Error: {str(e)}", "progress": 100}
 
 
 @app.post("/summarize-case-async")
@@ -401,3 +402,13 @@ def get_summarize_status(task_id: str):
     if not status:
         raise HTTPException(status_code=404, detail="Unknown task_id")
     return status
+
+@app.get("/summaries/by-case/{case_id}")
+def get_summaries_by_case(case_id: str):
+    results = []
+    for task_id, status in summarize_task_status.items():
+        if status.get("case_id") == case_id:
+            results.append({"task_id": task_id, "status": status})
+    if not results:
+        raise HTTPException(status_code=404, detail="No summaries found for this case_id")
+    return results
