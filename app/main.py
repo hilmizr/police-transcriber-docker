@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
+from app.models import MarkdownDocument, SummarizeRequest
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.services import (
@@ -330,16 +331,6 @@ def get_full_process_status(task_id: str):
 
 
 # ===== ASYNC SUMMARIZATION =====
-
-class MarkdownDocument(BaseModel):
-    doc_id: str  
-    content: str
-
-class SummarizeRequest(BaseModel):
-    case_id: Optional[str] = None 
-    markdowns: List[MarkdownDocument]
-    model_name: Optional[str] = None
-
 
 def summary_background_task(task_id: str, case_id: Optional[str], markdowns: List[str], model_name: str):
     try:
