@@ -1,13 +1,21 @@
+# Fetch CUDA wheels from the official PyTorch index
+--extra-index-url https://download.pytorch.org/whl/cu121
+
 fastapi
-uvicorn
-triton==2.0.0
+uvicorn[standard]
+
+# GPU build of PyTorch (+cu121 flavour)
+torch==2.2.0+cu121
+triton==2.2.0            # 2.2+ recommended for torch 2.x
+
 openai-whisper
-torch
-pyannote.audio
+pyannote.audio==3.2.1     # new pooling code, no std() warning
+
 langchain
 langchain-community
 langchain-openai
+
 markdown-pdf
 python-multipart
 python-dotenv
-ffmpeg
+ffmpeg-python
