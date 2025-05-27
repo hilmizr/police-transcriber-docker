@@ -9,8 +9,8 @@ WORKDIR /app
 
 # 3. Install ffmpeg and pre-create folders with correct ownership
 RUN apt-get update && apt-get install -y ffmpeg && \
-    mkdir -p static audio_sample output cache/hf/transformers cache/whisper && \
-    chown -R 1000:1000 static audio_sample output cache
+    mkdir -p static audio_sample output summary_output cache/hf/transformers cache/whisper && \
+    chown -R 1000:1000 static audio_sample output summary_output cache
 
 # 4. Switch to non-root user for security
 USER user

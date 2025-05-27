@@ -48,8 +48,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-SUMMARY_DIR = "summary_output"
-
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -57,6 +55,7 @@ logger = logging.getLogger(__name__)
 # Directories for audio input and output files
 AUDIO_DIR = os.getenv("AUDIO_DIR", "audio_sample")
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
+SUMMARY_DIR = os.getenv("SUMMARY_DIR", "summary_output")
 os.makedirs(AUDIO_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(SUMMARY_DIR, exist_ok=True)
@@ -238,6 +237,8 @@ summarize_task_status = {}
 
 # ===== ASYNC FULL PROCESS PIPELINE =====
 
+LARAVEL_ENDPOINT_CATATAN = "http://206.189.159.94:8000/api/callback/catatan"
+
 def full_process_pipeline(task_id: str, audio_path: str, audio_id: str, timestamp: str):
     try:
         full_process_task_status[task_id] = {"message": "Starting processing...", "progress": 5}
@@ -279,6 +280,31 @@ def full_process_pipeline(task_id: str, audio_path: str, audio_id: str, timestam
         with open(pdf_path, "rb") as f:
             pdf_bytes = f.read()
         pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+        
+        # ------------------------------------------------------------------
+        # 🔗  POST result to Laravel /callback/catatan
+        # ------------------------------------------------------------------
+        payload = {
+            "task_id": task_id,
+            "audio_id": audio_id,
+            "pasal_markdown": pasal,                      
+            "berita_acara_markdown": berita_acara_markdown,
+            "berita_acara_pdf_base64": pdf_b64,            
+            "polished_transcript": polished,
+            "saved_files": {
+                "polished_json": polished_json_name,
+                "pasal_markdown": pasal_md_name,
+                "berita_acara_markdown": md_name,
+                "berita_acara_pdf": pdf_name,
+            },
+        }
+
+        logging.info(f"Posting catatan payload to Laravel endpoint: {LARAVEL_ENDPOINT_CATATAN}")
+        try:
+            resp = requests.post(LARAVEL_ENDPOINT_CATATAN, json=payload, timeout=10)
+            logging.info("Laravel responded with %s", resp.status_code)
+        except Exception as e:
+            logging.error("Failed to post to Laravel endpoint: %s", e)
 
         full_process_task_status[task_id] = {
             "message": "Completed",
@@ -335,7 +361,7 @@ def get_full_process_status(task_id: str):
 
 # ===== ASYNC SUMMARIZATION =====
 
-LARAVEL_ENDPOINT = "http://206.189.159.94:8000/api/callback"  # change as needed
+LARAVEL_ENDPOINT_SUMMARY = "http://206.189.159.94:8000/api/callback/summary"  
 
 def summary_background_task(task_id: str, case_id: Optional[str], markdowns: List[str], model_name: str):
     try:
@@ -366,22 +392,22 @@ def summary_background_task(task_id: str, case_id: Optional[str], markdowns: Lis
         })
 
         # Prepare payload to send to Laravel backend (without summary_text)
-        # payload = {
-        #     "task_id": task_id,
-        #     "case_id": case_id,
-        #     "summary_markdown": summary_result["summary_markdown"],
-        #     "saved_files": {
-        #         "summary_markdown": md_filename
-        #     }
-        # }
+        payload = {
+            "task_id": task_id,
+            "case_id": case_id,
+            "summary_markdown": summary_result["summary_markdown"],
+            "saved_files": {
+                "summary_markdown": md_filename
+            }
+        }
 
-        # logging.info(f"Posting summary payload to Laravel endpoint: {LARAVEL_ENDPOINT}")
-        # try:
-        #     response = requests.post(LARAVEL_ENDPOINT, json=payload, timeout=10)
-        #     response.raise_for_status()
-        #     logging.info(f"Laravel endpoint responded with status: {response.status_code}")
-        # except Exception as e:
-        #     logging.error(f"Failed to post to Laravel endpoint: {e}")
+        logging.info(f"Posting summary payload to Laravel endpoint: {LARAVEL_ENDPOINT_SUMMARY}")
+        try:
+            response = requests.post(LARAVEL_ENDPOINT_SUMMARY, json=payload, timeout=10)
+            response.raise_for_status()
+            logging.info(f"Laravel endpoint responded with status: {response.status_code}")
+        except Exception as e:
+            logging.error(f"Failed to post to Laravel endpoint: {e}")
 
     except Exception as e:
         summarize_task_status[task_id] = {"case_id": case_id, "message": f"Error: {str(e)}", "progress": 100}
