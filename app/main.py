@@ -56,6 +56,8 @@ logger = logging.getLogger(__name__)
 AUDIO_DIR = os.getenv("AUDIO_DIR", "audio_sample")
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 SUMMARY_DIR = os.getenv("SUMMARY_DIR", "summary_output")
+MODEL_NAME = os.getenv("MODEL_NAME")
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "tiny")
 os.makedirs(AUDIO_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(SUMMARY_DIR, exist_ok=True)
@@ -66,7 +68,7 @@ STATIC_DIR = os.path.join(BASE_DIR, "..", "static")
 INDEX_HTML = os.path.join(STATIC_DIR, "index.html")
 
 # Model name for LLM
-model_name = "qwen/qwen3-235b-a22b"
+model_name = MODEL_NAME
 
 # Task progress dictionary
 task_status: Dict[str, Dict[str, object]] = {}
@@ -83,7 +85,7 @@ def serve_ui():
     return FileResponse(INDEX_HTML)
 
 # Initialize models once on startup
-asr_model, diarization_pipeline = initialize_models()
+asr_model, diarization_pipeline = initialize_models(model_type=WHISPER_MODEL)
 
 # === ADDED FULL PROCESS SYNC FOR POSTMAN TESTING ===
 
