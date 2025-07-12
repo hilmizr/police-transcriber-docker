@@ -9,9 +9,7 @@ Key change:
 """
 
 from typing import List, Optional, Any
-
 from pydantic import BaseModel
-
 
 # --------------------------------------------------------------------------- #
 # Transcription
@@ -22,14 +20,12 @@ class TranscriptionRequest(BaseModel):
     num_speakers: Optional[int] = None          # helps diarizer if known
     extra_formats: Optional[List[str]] = []     # e.g. ["srt", "vtt"]
 
-
 # --------------------------------------------------------------------------- #
 # Berita Acara generation (unchanged for now)
 # --------------------------------------------------------------------------- #
 class BeritaAcaraRequest(BaseModel):
     model_name: str
     aligned_segments: List[Any]                 # produced by service layer
-
 
 # --------------------------------------------------------------------------- #
 # Summaries & markdown utils (unchanged)

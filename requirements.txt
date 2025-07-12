@@ -14,3 +14,4 @@ ffmpeg
 httpx[http2] 
 nest_asyncio
 pydantic
+aiohttp

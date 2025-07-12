@@ -1,8 +1,4 @@
 from __future__ import annotations
-import whisper
-import torch
-from pyannote.audio import Pipeline
-from pyannote.audio.pipelines.utils.hook import ProgressHook
 from datetime import datetime
 import random
 import json
@@ -17,55 +13,12 @@ from typing import Any, Dict, List, Optional
 import httpx
 from app.config import *
 import re
+import requests as _req
+import time
 
 os.environ["WHISPER_CACHE"] = os.getenv("WHISPER_CACHE", "./cache/whisper")
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 os.makedirs(os.environ["WHISPER_CACHE"], exist_ok=True)
-
-# Initialize models once
-def initialize_models(model_type="tiny"):
-    whisper_cache_dir = os.environ.get("WHISPER_CACHE", "./cache/whisper")
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    asr_model = whisper.load_model(model_type, device=device, download_root=whisper_cache_dir)
-
-    diarization_pipeline = Pipeline.from_pretrained(
-        "pyannote/speaker-diarization-3.1",
-        use_auth_token=os.environ["HUGGINGFACE_HUB_TOKEN"]
-    )
-    return asr_model, diarization_pipeline
-
-def process_audio(audio_path, asr_model, diarization_pipeline):
-    transcript = asr_model.transcribe(
-        audio_path,
-        language="id",
-        word_timestamps=True,
-        initial_prompt=(
-            "Rekaman ini berasal dari proses gelar perkara oleh kepolisian Indonesia. "
-            "Harap transkripsi dalam Bahasa Indonesia formal. "
-            "Istilah-istilah seperti tersangka, saksi, barang bukti, pasal, dan laporan polisi harus dikenali."
-        ),
-        verbose=False
-    )
-    with ProgressHook() as hook:
-        diarization = diarization_pipeline(audio_path, hook=hook)
-    return transcript, diarization
-
-
-def align_segments(transcript: dict, diarization) -> list:
-    aligned = []
-    for seg in transcript.get("segments", []):
-        start, end = seg["start"], seg["end"]
-        text = seg["text"].strip()
-        candidates = [
-            (min(end, turn.end) - max(start, turn.start), spk)
-            for turn, _, spk in diarization.itertracks(yield_label=True)
-            if turn.start < end and turn.end > start
-        ]
-        speaker = max(candidates, key=lambda x: x[0])[
-            1] if candidates else "Unknown"
-        aligned.append({"speaker": speaker, "start": start,
-                       "end": end, "text": text})
-    return aligned
 
 class ChatOpenRouter(ChatOpenAI):
     openai_api_base: str
@@ -526,18 +479,61 @@ async def transcribe_audio(
 
 
 # --------------------------------------------------------------------------- #
-# 4.  Convenience: quick sync wrapper for scripts / tests
+# 4. Convenience: synchronous wrapper (safe in a BackgroundTask thread)
 # --------------------------------------------------------------------------- #
 def transcribe_audio_sync(
-    file_path: str | pathlib.Path,
+    file_path: pathlib.Path | str,
     num_speakers: int | None = None,
-    extra_formats: Optional[List[str]] = None,
+    extra_formats: list[str] | None = None,
 ) -> Dict[str, Any]:
     """
-    Run :func:`transcribe_audio` inside a fresh event-loop.
-    Useful in synchronous unit tests or one-off scripts.
+    Blocking upload + single poll so we always return a concrete `words` list.
+    Suitable for running inside FastAPI BackgroundTasks.
     """
-    import asyncio
+    data = {
+        "model_id": "scribe_v1_experimental",
+        "language_code": "ind",
+        "diarize": "true",
+        "timestamps_granularity": "word",
+    }
+    if num_speakers is not None:
+        data["num_speakers"] = num_speakers
+    if extra_formats:
+        data["additional_formats"] = json.dumps(
+            [{"format": fmt} for fmt in extra_formats]
+        )
 
-    return asyncio.run(transcribe_audio(file_path, num_speakers, extra_formats))
+    with open(file_path, "rb") as fh:
+        resp = _req.post(
+            os.environ["SCRIBE_ENDPOINT"],
+            headers={"xi-api-key": os.environ["XI_API_KEY"]},
+            files={"file": fh},
+            data=data,
+            timeout=900,
+        )
+    resp.raise_for_status()
+    raw = resp.json()
 
+    # ------------------------------------------------------------------ #
+    # if Scribe responded before diarisation finished, words may be null #
+    # ------------------------------------------------------------------ #
+    if raw.get("words") is None:
+        job_id = raw.get("job_id")
+        if not job_id:
+            raise RuntimeError("Scribe response missing both 'words' and 'job_id'.")
+
+        # one quick poll after 2 s
+        time.sleep(2)
+        poll = _req.get(
+            f"{os.environ['SCRIBE_ENDPOINT']}/{job_id}",
+            headers={"xi-api-key": os.environ["XI_API_KEY"]},
+            timeout=900,
+        )
+        poll.raise_for_status()
+        raw = poll.json()
+
+    if raw.get("words") is None:
+        raise RuntimeError("Scribe still returned no 'words' data after polling.")
+
+    raw["segments"] = _group_words(raw["words"])
+    return raw
