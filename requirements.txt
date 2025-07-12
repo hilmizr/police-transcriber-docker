@@ -1,6 +1,6 @@
 fastapi
 uvicorn
-triton==2.0.0
+# triton==2.0.0
 openai-whisper
 torch
 pyannote.audio
@@ -11,3 +11,6 @@ markdown-pdf
 python-multipart
 python-dotenv
 ffmpeg
+httpx[http2] 
+nest_asyncio
+pydantic

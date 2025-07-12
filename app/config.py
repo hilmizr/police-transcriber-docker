@@ -1,28 +1,51 @@
+"""
+Global configuration & environment bootstrap.
+
+Responsibilities
+----------------
+1. Load any `.env` file present at the project root (via python-dotenv).
+2. Pin cache directories (HF, Transformers, Whisper) to local folders so the
+   container or VM doesn’t redownload models on each run.
+3. Expose all API / secret keys as environment variables—including the new ones
+   for ElevenLabs Scribe.
+"""
+
 import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-# Load .env from project root (default behavior)
+# --------------------------------------------------------------------------- #
+# 1. Read .env (no-op if the file is absent)
+# --------------------------------------------------------------------------- #
 load_dotenv()
 
-# Set cache directories to local folders (inside container or repo)
-# These will be relative to the current working directory
+# --------------------------------------------------------------------------- #
+# 2. Local cache paths (override via .env if you like)
+# --------------------------------------------------------------------------- #
 os.environ["HF_HOME"] = os.getenv("HF_HOME", "./cache/hf")
 os.environ["TRANSFORMERS_CACHE"] = os.getenv("TRANSFORMERS_CACHE", "./cache/hf/transformers")
 os.environ["WHISPER_CACHE"] = os.getenv("WHISPER_CACHE", "./cache/whisper")
 
-# Optional: create cache directories at runtime
-for env_var in ["HF_HOME", "TRANSFORMERS_CACHE", "WHISPER_CACHE"]:
-    path = os.environ.get(env_var)
-    if path and not os.path.exists(path):
+for env_var in ("HF_HOME", "TRANSFORMERS_CACHE", "WHISPER_CACHE"):
+    path = Path(os.environ[env_var])
+    if not path.exists():
         try:
-            os.makedirs(path, exist_ok=True)
+            path.mkdir(parents=True, exist_ok=True)
         except PermissionError:
-            print(f"⚠️ Warning: Cannot create {path}. Ensure it is writable by the app.")
+            print(f"⚠️  Cannot create cache dir {path!s}. Make sure it’s writable.")
 
-# Hugging Face and LLM-related keys (should be set in .env or Hugging Face Secrets)
-os.environ["HUGGINGFACE_HUB_TOKEN"] = os.getenv("HUGGINGFACE_HUB_TOKEN")
-os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
-os.environ["OPENROUTER_API_KEY"] = os.getenv("OPENROUTER_API_KEY")
+# --------------------------------------------------------------------------- #
+# 3. Secrets & API keys
+# --------------------------------------------------------------------------- #
+# Existing keys
+os.environ["HUGGINGFACE_HUB_TOKEN"] = os.getenv("HUGGINGFACE_HUB_TOKEN", "")
+os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY", "")
+os.environ["OPENROUTER_API_KEY"] = os.getenv("OPENROUTER_API_KEY", "")
 
-
-
+# >>> NEW for ElevenLabs Scribe <<<
+os.environ["XI_API_KEY"] = os.getenv("XI_API_KEY", "")                   
+os.environ["SCRIBE_ENDPOINT"] = os.getenv(                              
+    "SCRIBE_ENDPOINT",
+    "https://api.elevenlabs.io/v1/speech-to-text",
+)

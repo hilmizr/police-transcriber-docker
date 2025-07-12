@@ -17,7 +17,9 @@ from app.services import (
     enhance_with_llm,
     generate_berita_acara,
     extract_pasal_hukum,
-    summarize_berita_acara
+    summarize_berita_acara,
+    transcribe_audio,
+    words_to_sentences
 )
 from markdown_pdf import MarkdownPdf, Section
 from dotenv import load_dotenv
@@ -434,3 +436,71 @@ def get_summaries_by_case(case_id: str):
     if not results:
         raise HTTPException(status_code=404, detail="No summaries found for this case_id")
     return results
+
+# --------------------------------------------------------------------------- #
+# Scribe test route – no LLM, no PDF, just raw diarised transcript
+# --------------------------------------------------------------------------- #
+@app.post("/scribe/transcribe")
+async def scribe_transcribe_only(
+    file: UploadFile = File(...),
+    num_speakers: Optional[int] = Form(None),
+    extra_formats: Optional[str] = Form(None),  # comma-sep: "srt,vtt"
+):
+    """
+    Upload audio → ElevenLabs Scribe → return JSON.
+
+    * num_speakers – pass an integer if you know exactly how many voices.
+    * extra_formats – "srt" or "srt,vtt" to also receive subtitle blobs.
+    """
+    # 1. Save the upload to a temp file
+    import tempfile, shutil, pathlib, uuid
+
+    suffix = pathlib.Path(file.filename).suffix or ".wav"
+    tmp_path = pathlib.Path(tempfile.gettempdir()) / f"{uuid.uuid4()}{suffix}"
+    with tmp_path.open("wb") as tmp:
+        shutil.copyfileobj(file.file, tmp)
+
+    # 2. Call Scribe
+    extras = [fmt.strip() for fmt in extra_formats.split(",")] if extra_formats else None
+    scribe_json = await transcribe_audio(
+        tmp_path,
+        num_speakers=num_speakers,
+        extra_formats=extras,
+    )
+
+    # 3. Clean up the temp file
+    try:
+        tmp_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    return scribe_json
+
+@app.post("/scribe/transcribe-sentences")
+async def scribe_sentences(
+    file: UploadFile = File(...),
+    num_speakers: Optional[int] = Form(None),
+):
+    """
+    Same upload as /scribe/transcribe but returns sentence-level rows:
+    [
+      {"speaker": "speaker_0", "text": "...", "start": 0.48, "end": 2.05,
+       "duration": 1.57},
+      ...
+    ]
+    """
+    import tempfile, shutil, pathlib, uuid
+
+    tmp = pathlib.Path(tempfile.gettempdir()) / f"{uuid.uuid4()}{pathlib.Path(file.filename).suffix}"
+    with tmp.open("wb") as fh:
+        shutil.copyfileobj(file.file, fh)
+
+    scribe_json = await transcribe_audio(tmp, num_speakers=num_speakers)
+    tmp.unlink(missing_ok=True)
+
+    sentence_rows = words_to_sentences(scribe_json["words"])
+
+    return {
+        "sentences": sentence_rows,
+        "text": scribe_json["text"],   # keep full transcript for convenience
+    }

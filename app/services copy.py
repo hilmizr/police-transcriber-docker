@@ -1,4 +1,3 @@
-from __future__ import annotations
 import whisper
 import torch
 from pyannote.audio import Pipeline
@@ -10,13 +9,8 @@ import os
 from markdown_pdf import MarkdownPdf, Section
 from langchain_community.chat_models import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
-import json
-import os
-import pathlib
-from typing import Any, Dict, List, Optional
-import httpx
+
 from app.config import *
-import re
 
 os.environ["WHISPER_CACHE"] = os.getenv("WHISPER_CACHE", "./cache/whisper")
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
@@ -67,6 +61,7 @@ def align_segments(transcript: dict, diarization) -> list:
                        "end": end, "text": text})
     return aligned
 
+
 class ChatOpenRouter(ChatOpenAI):
     openai_api_base: str
     openai_api_key: str
@@ -76,8 +71,8 @@ class ChatOpenRouter(ChatOpenAI):
         super().__init__(openai_api_base=openai_api_base,
                          openai_api_key=openai_api_key, model_name=model_name, **kwargs)
 
-def enhance_with_llm(aligned_output: List[Dict[str, any]], model_name: str) -> List[Dict[str, any]]:
-    """Polish grammar & spelling while preserving speaker / timestamps."""
+
+def enhance_with_llm(aligned_output: list, model_name: str) -> str:
     input_json = json.dumps(aligned_output, ensure_ascii=False)
 
     # Use double braces {{ }} to escape literal curly braces in LangChain
@@ -294,6 +289,18 @@ Returns a dict::
     }
 """
 
+from __future__ import annotations
+
+import json
+import os
+import pathlib
+from typing import Any, Dict, List, Optional
+
+import httpx
+
+from app.config import *  
+
+
 # --------------------------------------------------------------------------- #
 # 1.  Core upload helper
 # --------------------------------------------------------------------------- #
@@ -320,7 +327,7 @@ async def _scribe_request(
         If Scribe returns a non-2xx status code.
     """
     data: Dict[str, Any] = {
-        "model_id": "scribe_v1_experimental",
+        "model_id": "scribe_v1",
         "language_code": "ind",
         "diarize": "true",
         "timestamps_granularity": "word",  # default but explicit
@@ -403,99 +410,6 @@ def _group_words(
 
     return segments
 
-_SENT_BOUND = re.compile(r"[.!?]\s*$") 
-
-def words_to_sentences(
-    words: List[Dict[str, Any]],
-    *,
-    max_gap: float = 0.5,
-    merge_fillers: bool = True,
-) -> List[Dict[str, Any]]:
-    """
-    Convert Scribe word-level output into sentence-level rows.
-
-    Parameters
-    ----------
-    words : list of dict
-        Items like {"text": "Jadi", "start": 0.48, "end": 0.66, "speaker_id": "speaker_0", ...}
-    max_gap : float, default 0.5
-        Silence (in seconds) that forces a sentence break even without punctuation.
-    merge_fillers : bool, default True
-        If True, single-word fillers (e.g. "Oke", "Baik") are merged into the
-        preceding sentence of the same speaker.
-
-    Returns
-    -------
-    list of dict – each has keys: speaker, start, end, duration, text
-    """
-    if not words:
-        return []
-
-    sentences: List[Dict[str, Any]] = []
-    buf: List[Dict[str, Any]] = []
-    start: float | None = None
-    speaker: str = words[0]["speaker_id"]
-
-    def flush():
-        nonlocal buf, start
-        if not buf:
-            return
-        end = buf[-1]["end"]
-        sentences.append(
-            {
-                "speaker": speaker,
-                "start": start,
-                "end": end,
-                "duration": round(end - start, 3),
-                "text": " ".join(t["text"] for t in buf).strip(),
-            }
-        )
-        buf = []
-        start = None  # next word will reset this
-
-    for w in words:
-        if w.get("type") != "word":          # ignore spacing tokens
-            continue
-
-        # speaker switch triggers flush
-        if w["speaker_id"] != speaker:
-            flush()
-            speaker = w["speaker_id"]
-
-        # long silence triggers flush
-        if buf and (w["start"] - buf[-1]["end"]) > max_gap:
-            flush()
-
-        if start is None:
-            start = w["start"]
-
-        buf.append(w)
-
-        # punctuation triggers flush
-        if _SENT_BOUND.search(w["text"]):
-            flush()
-
-    flush()  # catch leftovers
-
-    # --- optional post-pass: merge orphan single-word fillers ---------------
-    if merge_fillers and sentences:
-        merged: List[Dict[str, Any]] = [sentences[0]]
-        for s in sentences[1:]:
-            if (
-                len(s["text"].split()) == 1
-                and s["speaker"] == merged[-1]["speaker"]
-            ):
-                # attach filler to previous sentence
-                merged[-1]["text"] += " " + s["text"]
-                merged[-1]["end"] = s["end"]
-                merged[-1]["duration"] = round(
-                    merged[-1]["end"] - merged[-1]["start"], 3
-                )
-            else:
-                merged.append(s)
-        sentences = merged
-
-    return sentences
 
 # --------------------------------------------------------------------------- #
 # 3.  Public façade
