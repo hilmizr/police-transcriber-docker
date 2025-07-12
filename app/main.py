@@ -5,7 +5,7 @@ import logging
 import base64
 from datetime import datetime
 from typing import Dict, List, Optional
-
+from app.models import SummarizeRequest
 import requests
 from fastapi import (
     FastAPI,
@@ -13,6 +13,7 @@ from fastapi import (
     File,
     Form,
     BackgroundTasks,
+    HTTPException
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -28,6 +29,8 @@ from app.services import (
     enhance_with_llm,
     extract_pasal_hukum,
     generate_berita_acara,
+    summarize_task_status,
+    summarize_berita_acara
 )
 
 # ── env & paths ──────────────────────────────────────────────────────────────
@@ -36,7 +39,7 @@ load_dotenv()
 AUDIO_DIR   = os.getenv("AUDIO_DIR",   "audio_sample")
 OUTPUT_DIR  = os.getenv("OUTPUT_DIR",  "output")
 SUMMARY_DIR = os.getenv("SUMMARY_DIR", "summary_output")
-MODEL_NAME  = os.getenv("MODEL_NAME")          # e.g. "qwen/qwen3-8b"
+MODEL_NAME  = os.getenv("MODEL_NAME")       
 
 for path in (AUDIO_DIR, OUTPUT_DIR, SUMMARY_DIR):
     os.makedirs(path, exist_ok=True)
@@ -214,92 +217,6 @@ def get_full_process_status(task_id: str):
         )
     return status
 
-# # ===== ASYNC SUMMARIZATION =====
-
-# LARAVEL_ENDPOINT_SUMMARY = "http://206.189.159.94:8000/api/callback/summary"  
-
-# def summary_background_task(task_id: str, case_id: Optional[str], markdowns: List[str], model_name: str):
-#     try:
-#         summarize_task_status[task_id] = {"case_id": case_id, "message": "Starting summary...", "progress": 5}
-
-#         summary_result = summarize_berita_acara(markdowns, model_name)
-
-#         summarize_task_status[task_id].update({"message": "Saving summary files...", "progress": 90})
-
-#         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-#         prefix = case_id if case_id else task_id
-
-#         # Save markdown summary only
-#         md_filename = f"{prefix}_{timestamp}_summary.md"
-#         md_path = os.path.join(SUMMARY_DIR, md_filename)
-#         with open(md_path, "w", encoding="utf-8") as f:
-#             f.write(summary_result["summary_markdown"])
-
-#         summarize_task_status[task_id].update({
-#             "message": "Completed",
-#             "progress": 100,
-#             "result": {
-#                 "summary_markdown": summary_result["summary_markdown"],
-#                 "saved_files": {
-#                     "summary_markdown": md_filename
-#                 }
-#             }
-#         })
-
-#         # Prepare payload to send to Laravel backend (without summary_text)
-#         payload = {
-#             "task_id": task_id,
-#             "case_id": case_id,
-#             "summary_markdown": summary_result["summary_markdown"],
-#             "saved_files": {
-#                 "summary_markdown": md_filename
-#             }
-#         }
-
-#         logging.info(f"Posting summary payload to Laravel endpoint: {LARAVEL_ENDPOINT_SUMMARY}")
-#         try:
-#             response = requests.post(LARAVEL_ENDPOINT_SUMMARY, json=payload, timeout=10)
-#             response.raise_for_status()
-#             logging.info(f"Laravel endpoint responded with status: {response.status_code}")
-#         except Exception as e:
-#             logging.error(f"Failed to post to Laravel endpoint: {e}")
-
-#     except Exception as e:
-#         summarize_task_status[task_id] = {"case_id": case_id, "message": f"Error: {str(e)}", "progress": 100}
-
-
-# @app.post("/summarize-case-async")
-# async def summarize_case_async(req: SummarizeRequest, background_tasks: BackgroundTasks):
-#     if not req.markdowns or len(req.markdowns) == 0:
-#         raise HTTPException(status_code=400, detail="No markdowns provided")
-
-#     task_id = str(uuid.uuid4())
-
-#     markdown_texts = [item.content for item in req.markdowns]
-#     model = req.model_name or MODEL_NAME
-
-#     background_tasks.add_task(summary_background_task, task_id, req.case_id, markdown_texts, model)
-
-#     return {"task_id": task_id, "message": "Summary job started. Use /status/summarize/{task_id} to check progress."}
-
-
-# @app.get("/status/summarize/{task_id}")
-# def get_summarize_status(task_id: str):
-#     status = summarize_task_status.get(task_id)
-#     if not status:
-#         raise HTTPException(status_code=404, detail="Unknown task_id")
-#     return status
-
-# @app.get("/summaries/by-case/{case_id}")
-# def get_summaries_by_case(case_id: str):
-#     results = []
-#     for task_id, status in summarize_task_status.items():
-#         if status.get("case_id") == case_id:
-#             results.append({"task_id": task_id, "status": status})
-#     if not results:
-#         raise HTTPException(status_code=404, detail="No summaries found for this case_id")
-#     return results
-
 # --------------------------------------------------------------------------- #
 # Scribe test route – no LLM, no PDF, just raw diarised transcript
 # --------------------------------------------------------------------------- #
@@ -331,3 +248,91 @@ async def scribe_sentences(
         "sentences": sentence_rows,
         "text": scribe_json["text"],   # keep full transcript for convenience
     }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SUMMARIZATION
+# ─────────────────────────────────────────────────────────────────────────────
+
+LARAVEL_ENDPOINT_SUMMARY = "http://206.189.159.94:8000/api/callback/summary"  
+
+def summary_background_task(task_id: str, case_id: Optional[str], markdowns: List[str], model_name: str):
+    try:
+        summarize_task_status[task_id] = {"case_id": case_id, "message": "Starting summary...", "progress": 5}
+
+        summary_result = summarize_berita_acara(markdowns, model_name)
+
+        summarize_task_status[task_id].update({"message": "Saving summary files...", "progress": 90})
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        prefix = case_id if case_id else task_id
+
+        # Save markdown summary only
+        md_filename = f"{prefix}_{timestamp}_summary.md"
+        md_path = os.path.join(SUMMARY_DIR, md_filename)
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(summary_result["summary_markdown"])
+
+        summarize_task_status[task_id].update({
+            "message": "Completed",
+            "progress": 100,
+            "result": {
+                "summary_markdown": summary_result["summary_markdown"],
+                "saved_files": {
+                    "summary_markdown": md_filename
+                }
+            }
+        })
+
+        # Prepare payload to send to Laravel backend (without summary_text)
+        payload = {
+            "task_id": task_id,
+            "case_id": case_id,
+            "summary_markdown": summary_result["summary_markdown"],
+            "saved_files": {
+                "summary_markdown": md_filename
+            }
+        }
+
+        logging.info(f"Posting summary payload to Laravel endpoint: {LARAVEL_ENDPOINT_SUMMARY}")
+        try:
+            response = requests.post(LARAVEL_ENDPOINT_SUMMARY, json=payload, timeout=10)
+            response.raise_for_status()
+            logging.info(f"Laravel endpoint responded with status: {response.status_code}")
+        except Exception as e:
+            logging.error(f"Failed to post to Laravel endpoint: {e}")
+
+    except Exception as e:
+        summarize_task_status[task_id] = {"case_id": case_id, "message": f"Error: {str(e)}", "progress": 100}
+
+
+@app.post("/summarize-case-async")
+async def summarize_case_async(req: SummarizeRequest, background_tasks: BackgroundTasks):
+    if not req.markdowns or len(req.markdowns) == 0:
+        raise HTTPException(status_code=400, detail="No markdowns provided")
+
+    task_id = str(uuid.uuid4())
+
+    markdown_texts = [item.content for item in req.markdowns]
+    model = req.model_name or MODEL_NAME
+
+    background_tasks.add_task(summary_background_task, task_id, req.case_id, markdown_texts, model)
+
+    return {"task_id": task_id, "message": "Summary job started. Use /status/summarize/{task_id} to check progress."}
+
+
+@app.get("/status/summarize/{task_id}")
+def get_summarize_status(task_id: str):
+    status = summarize_task_status.get(task_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Unknown task_id")
+    return status
+
+@app.get("/summaries/by-case/{case_id}")
+def get_summaries_by_case(case_id: str):
+    results = []
+    for task_id, status in summarize_task_status.items():
+        if status.get("case_id") == case_id:
+            results.append({"task_id": task_id, "status": status})
+    if not results:
+        raise HTTPException(status_code=404, detail="No summaries found for this case_id")
+    return results

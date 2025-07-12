@@ -195,57 +195,56 @@ def extract_pasal_hukum(aligned_segments: list, model_name: str) -> str:
     result = chain.invoke({"input": combined_transcript})
     return result.content
 
-# === ADDED SUMMARIZE CASE ===
+# ─────────────────────────────────────────────────────────────────────────────
+# SUMMARY RELATED
+# ─────────────────────────────────────────────────────────────────────────────
 
-def summarize_berita_acara(markdowns: list[str], model_name: str) -> dict:
+_SUMMARY_CHUNK_WORDS = 2_000
+_MAX_RETRY           = 3
+
+def _invoke_llm_json(chain, payload: Dict[str, str]) -> Dict[str, Any]:
+    """Panggil chain dan pastikan keluarannya JSON; ulangi bila perlu."""
+    hint = "\n\n⚠️ Ulangi: KEMBALIKAN HANYA JSON valid sesuai format!"
+    for attempt in range(1, _MAX_RETRY + 1):
+        raw = chain.invoke(payload).content
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            if attempt < _MAX_RETRY:
+                payload = {"input": payload["input"] + hint}
+            else:
+                raise RuntimeError(
+                    f"LLM gagal mengeluarkan JSON valid setelah {_MAX_RETRY} percobaan."
+                )
+    return {}
+
+def summarize_berita_acara(markdowns: List[str], model_name: str) -> Dict[str, Any]:
     joined = "\n\n---\n\n".join(markdowns)
+
     prompt = ChatPromptTemplate.from_messages([
-        ("system", """
-            Anda adalah asisten AI yang ahli dalam merangkum dokumen resmi gelar perkara.
-            Anda akan menerima beberapa Berita Acara (Markdown) terpisah.
-            Buat ringkasan formal dalam Markdown (gunakan heading, daftar, dll.).
-
-            **PENTING**: Hanya kembalikan output dalam bentuk JSON yang valid tanpa penjelasan tambahan, tanpa teks lain, tanpa kode markdown, hanya JSON murni.
-
-            Format JSON:
-            {{
-                "summary_markdown": "..."
-            }}
-            """),
+        ("system",
+         "Anda adalah asisten AI yang ahli dalam merangkum dokumen resmi gelar perkara.\n"
+         "Anda akan menerima beberapa Berita Acara (Markdown) terpisah.\n"
+         "Buat ringkasan formal dalam Markdown (gunakan heading, daftar, dll.).\n\n"
+         "**PENTING**: Kembalikan output berupa JSON valid **tanpa** penjelasan lain.\n\n"
+         "Format JSON:\n"
+         "{{\n  \"summary_markdown\": \"...\"\n}}"),   
         ("user", "{input}")
     ])
-    llm = ChatOpenRouter(model_name=model_name,
-                         temperature=0.3, max_tokens=16000)
+
+    llm   = ChatOpenRouter(model_name=model_name,
+                           temperature=0.3,
+                           max_tokens=16_000)
+
     chain = prompt | llm
-    result = chain.invoke({"input": joined})
-    try:
-        return json.loads(result.content)
-    except json.JSONDecodeError:
-        raise RuntimeError("Gagal parse JSON dari LLM.")
+    return _invoke_llm_json(chain, {"input": joined})
 
-"""
-services.py
-===========
+# ── progress map ────────────────────────────────────────────
+summarize_task_status: Dict[str, Dict[str, object]] = {}
 
-Async helpers for transcription + diarization via **ElevenLabs Scribe**.
-This replaces the former local Whisper + pyannote pipeline.
-
-Public API
-----------
-async transcribe_audio(
-    file_path: str | pathlib.Path,
-    num_speakers: int | None = None,
-    extra_formats: list[str] | None = None,
-) -> dict
-
-Returns a dict::
-
-    {
-        "text": "<full transcript>",
-        "words": [...],       # raw Scribe word list with speaker_id
-        "segments": [...],    # grouped paragraphs per speaker
-    }
-"""
+# ─────────────────────────────────────────────────────────────────────────────
+# SCRIBE RELATED
+# ─────────────────────────────────────────────────────────────────────────────
 
 # --------------------------------------------------------------------------- #
 # 1.  Core upload helper
