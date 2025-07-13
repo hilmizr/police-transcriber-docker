@@ -39,7 +39,6 @@ class Segment(BaseModel):
 class BeritaAcaraRequest(BaseModel):
     model_name: str
     aligned_segments: List[Segment]          # now truly typed
-    pasal_list: str = ""                     # optional – already formatted MD
     nomor: Optional[str] = None              # allow caller override (tests)
 
 # --------------------------------------------------------------------------- #

@@ -357,8 +357,6 @@ Berita acara harus ditulis dalam **Bahasa Indonesia yang formal dan sesuai struk
 - Nomor: {nomor}
 - Tanggal: {tanggal}
 **Tambahkan setelah Kesimpulan dan Rekomendasi:**
-**Daftar Pasal Hukum yang Diterapkan dengan Penjelasan:**
-{pasal_list}
 
 Catatan penting:
 - Gunakan Bahasa Indonesia yang formal dan sesuai format dokumen resmi.
@@ -377,7 +375,7 @@ def format_tanggal_formal(dt):
     }
     return f"{dt.day} {bulan[dt.month]} {dt.year}"
 
-def generate_berita_acara(aligned_segments: list, model_name: str, pasal_list: str = "") -> str:
+def generate_berita_acara(aligned_segments: list, model_name: str) -> str:
     nomor = generate_nomor_berita_acara()
     tanggal = format_tanggal_formal(datetime.now())
     formatted_input = "\n".join(
@@ -392,8 +390,7 @@ def generate_berita_acara(aligned_segments: list, model_name: str, pasal_list: s
                      temperature=0.3)
     chain = berita_acara_prompt.partial(
         nomor_berita_acara=nomor,
-        tanggal=tanggal,
-        pasal_list=pasal_list
+        tanggal=tanggal
     ) | llm
     result = chain.invoke({"input": formatted_input})
     return result.content
@@ -431,8 +428,7 @@ def generate_berita_acara_req(req: BeritaAcaraRequest) -> str:
     # Use the same prompt template as before
     berita_acara_prompt = ChatPromptTemplate.from_messages([
         ("system", PROMPT_BERITA_ACARA.format(nomor=nomor,
-                                      tanggal=tanggal,
-                                      pasal_list=req.pasal_list)),
+                                      tanggal=tanggal)),
         ("user", "{input}")
     ])
 

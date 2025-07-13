@@ -145,8 +145,7 @@ def full_process_pipeline(
 
         req_ba = BeritaAcaraRequest(
             model_name=MODEL_NAME,
-            aligned_segments=polished_models,
-            pasal_list=PASAL_PLACEHOLDER,
+            aligned_segments=polished_models
         )
         berita = generate_berita_acara_req(req_ba)
 
