@@ -5,7 +5,7 @@ import logging
 import base64
 from datetime import datetime
 from typing import Dict, List, Optional
-from app.models import SummarizeRequest
+from app.models import TranscriptionRequest, SummarizeRequest 
 import requests
 from fastapi import (
     FastAPI,
@@ -24,6 +24,8 @@ from dotenv import load_dotenv
 # ── service helpers ──────────────────────────────────────────────────────────
 from app.services import (
     transcribe_audio,
+    transcribe_audio_req,       
+    transcribe_audio_sync_req, 
     transcribe_audio_sync,     # Scribe (blocking wrapper)
     words_to_sentences,        # sentence grouping
     enhance_with_llm,
@@ -99,7 +101,12 @@ def full_process_pipeline(
     try:
         # 1. Scribe
         full_process_task_status[task_id] = {"message": "Uploading to Scribe…", "progress": 10}
-        scribe_json = transcribe_audio_sync(audio_path, num_speakers)
+        req = TranscriptionRequest(
+            audio_file_path=audio_path,
+            num_speakers=num_speakers,
+            extra_formats=None
+        )
+        scribe_json = transcribe_audio_sync_req(req)
 
         if not scribe_json.get("words"):
             raise RuntimeError("Scribe response contained no words list.")
@@ -248,6 +255,12 @@ async def scribe_sentences(
         "sentences": sentence_rows,
         "text": scribe_json["text"],   # keep full transcript for convenience
     }
+
+@app.post("/scribe/transcribe-json")
+async def scribe_transcribe_json(req: TranscriptionRequest):
+    scribe_json   = await transcribe_audio_req(req)
+    sentence_rows = words_to_sentences(scribe_json["words"])
+    return {"sentences": sentence_rows, "text": scribe_json["text"]}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SUMMARIZATION

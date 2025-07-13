@@ -25,6 +25,8 @@ OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 # SCRIBE RELATED
 # ─────────────────────────────────────────────────────────────────────────────
 
+from app.models import TranscriptionRequest 
+
 # --------------------------------------------------------------------------- #
 # 1.  Core upload helper
 # --------------------------------------------------------------------------- #
@@ -35,26 +37,12 @@ async def _scribe_request(
 ) -> Dict[str, Any]:
     """
     Upload *file_path* to ElevenLabs Scribe and return the raw JSON.
-
-    Parameters
-    ----------
-    file_path : str | pathlib.Path
-        Path to a WAV / MP3 / FLAC file.
-    num_speakers : int | None, default None
-        If you know the exact speaker count, pass it to improve diarization.
-    extra_formats : list[str] | None
-        e.g. ["srt", "vtt"] – Scribe will add those formats to the response.
-
-    Raises
-    ------
-    httpx.HTTPStatusError
-        If Scribe returns a non-2xx status code.
     """
     data: Dict[str, Any] = {
         "model_id": "scribe_v1_experimental",
         "language_code": "ind",
         "diarize": "true",
-        "timestamps_granularity": "word",  # default but explicit
+        "timestamps_granularity": "word",
     }
     if num_speakers is not None:
         data["num_speakers"] = num_speakers
@@ -81,19 +69,6 @@ async def _scribe_request(
 def _group_words(
     words: List[Dict[str, Any]], max_gap: float = 0.3
 ) -> List[Dict[str, Any]]:
-    """
-    Turn word-level list into larger segments per speaker.
-
-    Parameters
-    ----------
-    words : list of {"text","start","end","speaker_id", ...}
-    max_gap : float
-        If the time gap between two words exceeds *max_gap*, start a new segment.
-
-    Returns
-    -------
-    list of {"speaker", "start", "end", "text"}
-    """
     if not words:
         return []
 
@@ -105,7 +80,6 @@ def _group_words(
     for w in words:
         gap = w["start"] - buf[-1]["end"] if buf else 0.0
         if w["speaker_id"] != speaker or gap > max_gap:
-            # flush current buffer
             end = buf[-1]["end"]
             segments.append(
                 {
@@ -118,10 +92,8 @@ def _group_words(
             buf = []
             start = w["start"]
             speaker = w["speaker_id"]
-
         buf.append(w)
 
-    # flush last buffer
     if buf:
         segments.append(
             {
@@ -131,10 +103,11 @@ def _group_words(
                 "text": " ".join(x["text"] for x in buf),
             }
         )
-
     return segments
 
-_SENT_BOUND = re.compile(r"[.!?]\s*$") 
+
+_SENT_BOUND = re.compile(r"[.!?]\s*$")
+
 
 def words_to_sentences(
     words: List[Dict[str, Any]],
@@ -142,23 +115,6 @@ def words_to_sentences(
     max_gap: float = 0.5,
     merge_fillers: bool = True,
 ) -> List[Dict[str, Any]]:
-    """
-    Convert Scribe word-level output into sentence-level rows.
-
-    Parameters
-    ----------
-    words : list of dict
-        Items like {"text": "Jadi", "start": 0.48, "end": 0.66, "speaker_id": "speaker_0", ...}
-    max_gap : float, default 0.5
-        Silence (in seconds) that forces a sentence break even without punctuation.
-    merge_fillers : bool, default True
-        If True, single-word fillers (e.g. "Oke", "Baik") are merged into the
-        preceding sentence of the same speaker.
-
-    Returns
-    -------
-    list of dict – each has keys: speaker, start, end, duration, text
-    """
     if not words:
         return []
 
@@ -181,42 +137,30 @@ def words_to_sentences(
                 "text": " ".join(t["text"] for t in buf).strip(),
             }
         )
-        buf = []
-        start = None  # next word will reset this
+        buf.clear()
+        start = None
 
     for w in words:
-        if w.get("type") != "word":          # ignore spacing tokens
+        if w.get("type") != "word":
             continue
-
-        # speaker switch triggers flush
         if w["speaker_id"] != speaker:
             flush()
             speaker = w["speaker_id"]
-
-        # long silence triggers flush
         if buf and (w["start"] - buf[-1]["end"]) > max_gap:
             flush()
 
         if start is None:
             start = w["start"]
-
         buf.append(w)
-
-        # punctuation triggers flush
         if _SENT_BOUND.search(w["text"]):
             flush()
 
-    flush()  # catch leftovers
+    flush()
 
-    # --- optional post-pass: merge orphan single-word fillers ---------------
     if merge_fillers and sentences:
         merged: List[Dict[str, Any]] = [sentences[0]]
         for s in sentences[1:]:
-            if (
-                len(s["text"].split()) == 1
-                and s["speaker"] == merged[-1]["speaker"]
-            ):
-                # attach filler to previous sentence
+            if len(s["text"].split()) == 1 and s["speaker"] == merged[-1]["speaker"]:
                 merged[-1]["text"] += " " + s["text"]
                 merged[-1]["end"] = s["end"]
                 merged[-1]["duration"] = round(
@@ -225,49 +169,44 @@ def words_to_sentences(
             else:
                 merged.append(s)
         sentences = merged
-
     return sentences
 
+
 # --------------------------------------------------------------------------- #
-# 3.  Public façade
+# 3.  Public façade (param-based)
 # --------------------------------------------------------------------------- #
 async def transcribe_audio(
     file_path: str | pathlib.Path,
     num_speakers: int | None = None,
     extra_formats: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """
-    High-level convenience wrapper that:
-
-    1. Calls Scribe,
-    2. Groups words into speaker paragraphs.
-
-    Returns
-    -------
-    dict with keys ``text``, ``words`` (raw), and ``segments`` (grouped).
-    """
     scribe_json = await _scribe_request(file_path, num_speakers, extra_formats)
     segments = _group_words(scribe_json.get("words", []))
-
-    return {
-        "text": scribe_json.get("text", ""),
-        "words": scribe_json.get("words", []),
-        "segments": segments,
-    }
+    return {"text": scribe_json.get("text", ""), "words": scribe_json.get("words", []), "segments": segments}
 
 
 # --------------------------------------------------------------------------- #
-# 4. Convenience: synchronous wrapper (safe in a BackgroundTask thread)
+# 3a.  Public façade (model-based)
+# --------------------------------------------------------------------------- #
+async def transcribe_audio_req(req: TranscriptionRequest) -> Dict[str, Any]:
+    """
+    Same as `transcribe_audio`, but accepts a `TranscriptionRequest` object.
+    """
+    return await transcribe_audio(
+        file_path=req.audio_file_path,
+        num_speakers=req.num_speakers,
+        extra_formats=req.extra_formats or None,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 4.  Convenience: synchronous wrapper (param-based)
 # --------------------------------------------------------------------------- #
 def transcribe_audio_sync(
     file_path: pathlib.Path | str,
     num_speakers: int | None = None,
     extra_formats: list[str] | None = None,
 ) -> Dict[str, Any]:
-    """
-    Blocking upload + single poll so we always return a concrete `words` list.
-    Suitable for running inside FastAPI BackgroundTasks.
-    """
     data = {
         "model_id": "scribe_v1_experimental",
         "language_code": "ind",
@@ -292,15 +231,10 @@ def transcribe_audio_sync(
     resp.raise_for_status()
     raw = resp.json()
 
-    # ------------------------------------------------------------------ #
-    # if Scribe responded before diarisation finished, words may be null #
-    # ------------------------------------------------------------------ #
     if raw.get("words") is None:
         job_id = raw.get("job_id")
         if not job_id:
             raise RuntimeError("Scribe response missing both 'words' and 'job_id'.")
-
-        # one quick poll after 2 s
         time.sleep(2)
         poll = _req.get(
             f"{os.environ['SCRIBE_ENDPOINT']}/{job_id}",
@@ -315,6 +249,20 @@ def transcribe_audio_sync(
 
     raw["segments"] = _group_words(raw["words"])
     return raw
+
+
+# --------------------------------------------------------------------------- #
+# 4a.  Convenience: synchronous wrapper (model-based)
+# --------------------------------------------------------------------------- #
+def transcribe_audio_sync_req(req: TranscriptionRequest) -> Dict[str, Any]:
+    """
+    Synchronous transcription using a `TranscriptionRequest` object.
+    """
+    return transcribe_audio_sync(
+        file_path=req.audio_file_path,
+        num_speakers=req.num_speakers,
+        extra_formats=req.extra_formats or None,
+    )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POLISH WITH LLM
