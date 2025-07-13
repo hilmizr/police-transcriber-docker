@@ -10,7 +10,8 @@ from app.models import (
     SummarizeRequest, 
     Segment, 
     BeritaAcaraRequest, 
-    PasalCaseExtractRequest
+    PasalCaseExtractRequest,
+    KronologiCaseExtractRequest
 )
 
 import requests
@@ -38,7 +39,8 @@ from app.services import (
     extract_pasal_from_berita,
     generate_berita_acara_req,
     summarize_task_status,
-    summarize_berita_acara
+    summarize_berita_acara,
+    extract_kronologi_from_berita
 )
 
 # ── env & paths ──────────────────────────────────────────────────────────────
@@ -408,6 +410,109 @@ def get_pasal_case_status(task_id: str):
     if not status:
         raise HTTPException(status_code=404, detail="Unknown task_id")
     return status
+
+# ─────────────────────────────────────────────────────────────────────────────
+# K R O N O L O G I   E X T R A C T I O N
+# ─────────────────────────────────────────────────────────────────────────────
+kronologi_case_task_status: Dict[str, Dict[str, object]] = {}
+LARAVEL_ENDPOINT_KRONOLOGI = "http://206.189.159.94:8000/api/callback/kronologi"
+
+# ---------- background worker ------------------------------------------------
+def kronologi_case_background(task_id: str,
+                              case_id: Optional[str],
+                              markdowns: List[str],
+                              model_name: str):
+    try:
+        kronologi_case_task_status[task_id] = {
+            "case_id": case_id,
+            "message": "Starting kronologi extraction…",
+            "progress": 5,
+        }
+
+        # 1 · call helper
+        result = extract_kronologi_from_berita(markdowns, model_name)
+        # result = {"kronologi_markdown": "1. 03 Feb 2025 – ...\n2. ..."}
+
+        # 2 · persist to disk
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        prefix    = case_id or task_id
+        md_file   = f"{prefix}_{timestamp}_kronologi.md"
+        md_path   = os.path.join(SUMMARY_DIR, md_file)
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(result["kronologi_markdown"])
+
+        # 3 · build payload for Laravel
+        payload = {
+            "task_id": task_id,
+            "case_id": case_id,
+            "kronologi_markdown": result["kronologi_markdown"],
+            "saved_files": {
+                "kronologi_markdown": md_file
+            }
+        }
+
+        # 4 · callback
+        try:
+            logging.info(f"Posting kronologi payload → {LARAVEL_ENDPOINT_KRONOLOGI}")
+            resp = requests.post(LARAVEL_ENDPOINT_KRONOLOGI, json=payload, timeout=10)
+            resp.raise_for_status()
+            logging.info(f"Laravel /kronologi responded {resp.status_code}")
+        except Exception as e:
+            logging.error(f"Laravel callback failed: {e}")
+
+        # 5 · final status
+        kronologi_case_task_status[task_id] = {
+            "case_id": case_id,
+            "message": "Completed",
+            "progress": 100,
+            "result": {
+                "kronologi_markdown": result["kronologi_markdown"],
+                "saved_files": {"kronologi_markdown": md_file},
+            },
+        }
+
+    except Exception as e:
+        kronologi_case_task_status[task_id] = {
+            "case_id": case_id,
+            "message": f"Error: {e}",
+            "progress": 100,
+        }
+
+# ---------- API routes -------------------------------------------------------
+@app.post("/kronologi-case-extract-async")
+async def kronologi_case_extract_async(
+    req: KronologiCaseExtractRequest,
+    background_tasks: BackgroundTasks,
+):
+    """
+    Launch an async job that produces a consolidated chronology
+    from several Berita Acara markdown docs.
+    """
+    if not req.markdowns:
+        raise HTTPException(status_code=400, detail="No markdowns provided")
+
+    task_id = str(uuid.uuid4())
+    model   = req.model_name or MODEL_NAME
+    md_text = [m.content for m in req.markdowns]
+
+    background_tasks.add_task(
+        kronologi_case_background,
+        task_id, req.case_id, md_text, model
+    )
+
+    return {
+        "task_id": task_id,
+        "message": "Kronologi-extraction job started. "
+                   "Use /status/kronologi-case/{task_id} for progress."
+    }
+
+@app.get("/status/kronologi-case/{task_id}")
+def get_kronologi_case_status(task_id: str):
+    status = kronologi_case_task_status.get(task_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Unknown task_id")
+    return status
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SUMMARIZATION

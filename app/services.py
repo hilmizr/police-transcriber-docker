@@ -491,6 +491,44 @@ def extract_pasal_from_berita(
     return _invoke_llm_json(chain, {"input": joined})
 
 # ─────────────────────────────────────────────────────────────────────────────
+# KRONOLOGI KASUS
+# ─────────────────────────────────────────────────────────────────────────────
+def extract_kronologi_from_berita(
+    markdowns: List[str],
+    model_name: str,
+) -> Dict[str, Any]:
+    """
+    Accept several Berita-Acara markdown docs, return a single Markdown
+    chronology in a JSON wrapper identical in spirit to pasal/summary helpers:
+        { "kronologi_markdown": "<ordered list / timeline …>" }
+    """
+    joined = "\n\n---\n\n".join(markdowns)
+
+    prompt = ChatPromptTemplate.from_messages([
+        (
+            "system",
+            "Anda adalah asisten AI kepolisian yang terlatih untuk mengekstraksi "
+            "K R O N O L O G I kejadian dari Berita Acara gelar perkara.\n"
+            "Anda akan menerima beberapa Berita Acara (Markdown) terpisah.\n\n"
+            "Susun kronologi secara berurutan waktu (paling awal → paling akhir). "
+            "Cantumkan tanggal, jam (jika ada), dan ringkasan singkat tiap peristiwa. "
+            "Jika tanggal lengkap tidak tersedia, gunakan perkiraan logis "
+            "(mis. 'awal Mei 2025').\n\n"
+            "**PENTING**: Kembalikan output berupa JSON valid **tanpa penjelasan lain**.\n\n"
+            "Format JSON:\n"
+            "{{\n"
+            "  \"kronologi_markdown\": \"1. 03 Feb 2025 – audit internal menemukan selisih Rp 4,2 miliar\\n"
+            "                         2. 05 Feb 2025 – LP/B/75/II/2025 dibuat ...\"\n"
+            "}}"
+        ),
+        ("user", "{input}"),
+    ])
+
+    llm = ChatOpenAI(model_name=model_name, temperature=0.25)
+    chain = prompt | llm
+    return _invoke_llm_json(chain, {"input": joined})
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SUMMARY RELATED
 # ─────────────────────────────────────────────────────────────────────────────
 def summarize_berita_acara(markdowns: List[str], model_name: str) -> Dict[str, Any]:

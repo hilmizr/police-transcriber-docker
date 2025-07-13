@@ -60,3 +60,11 @@ class PasalCaseExtractRequest(BaseModel):
     case_id: Optional[str] = None
     markdowns: List[MarkdownDocument]   
     model_name: Optional[str] = None
+
+# --------------------------------------------------------------------------- #
+# Ekstraksi Kronologi
+# --------------------------------------------------------------------------- #
+class KronologiCaseExtractRequest(BaseModel):
+    case_id: Optional[str] = None
+    markdowns: List[MarkdownDocument]
+    model_name: Optional[str] = None
