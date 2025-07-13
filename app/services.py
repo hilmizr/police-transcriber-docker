@@ -18,7 +18,7 @@ from app.config import *
 import re
 import requests as _req
 import time
-from app.models import Segment, TranscriptionRequest 
+from app.models import Segment, TranscriptionRequest, PasalExtraction, PasalItem
 from pydantic import parse_obj_as   
 
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
@@ -339,14 +339,12 @@ def enhance_with_llm_req(
 def generate_nomor_berita_acara():
     return f"BA-{datetime.now().year}-{random.randint(1000, 9999)}"
 
-
 def format_tanggal_formal(dt):
     bulan = {
         1: "Januari", 2: "Februari", 3: "Maret", 4: "April", 5: "Mei", 6: "Juni",
         7: "Juli", 8: "Agustus", 9: "September", 10: "Oktober", 11: "November", 12: "Desember"
     }
     return f"{dt.day} {bulan[dt.month]} {dt.year}"
-
 
 def generate_berita_acara(aligned_segments: list, model_name: str, pasal_list: str = "") -> str:
     nomor = generate_nomor_berita_acara()
@@ -397,7 +395,6 @@ Catatan penting:
     ) | llm
     result = chain.invoke({"input": formatted_input})
     return result.content
-
 
 def export_markdown_and_pdf(content: str, md_path: str, pdf_path: str):
     output_dir = os.path.dirname(md_path)
@@ -450,11 +447,28 @@ def extract_pasal_hukum(aligned_segments: list, model_name: str) -> str:
     result = chain.invoke({"input": combined_transcript})
     return result.content
 
+def extract_pasal_hukum_models(
+    segments: List[Segment], model_name: str
+) -> PasalExtraction:
+    transcript = "\n".join(f"{s.speaker}: {s.text}" for s in segments)
+
+    llm  = ChatOpenAI(model_name=model_name, temperature=0.2)
+    text = (pasal_prompt | llm).invoke({"input": transcript}).content
+
+    # very light parsing: split by lines that start with "Pasal"
+    items: List[PasalItem] = []
+    for line in text.splitlines():
+        if line.strip().lower().startswith("pasal"):
+            parts = line.split(" ", 3)  # "Pasal 362 KUHP tentang ..."
+            if len(parts) >= 3:
+                nomor = " ".join(parts[:3])          # "Pasal 362 KUHP"
+                desc  = parts[3] if len(parts) == 4 else ""
+                items.append(PasalItem(pasal=nomor, deskripsi=desc))
+    return PasalExtraction(items=items, raw_markdown=text)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SUMMARY RELATED
 # ─────────────────────────────────────────────────────────────────────────────
-
-_SUMMARY_CHUNK_WORDS = 2_000
 _MAX_RETRY           = 3
 
 def _invoke_llm_json(chain, payload: Dict[str, str]) -> Dict[str, Any]:

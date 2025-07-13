@@ -29,7 +29,7 @@ from app.services import (
     transcribe_audio_sync,     # Scribe (blocking wrapper)
     words_to_sentences,        # sentence grouping
     enhance_with_llm_req,
-    extract_pasal_hukum,
+    extract_pasal_hukum_models,
     generate_berita_acara,
     summarize_task_status,
     summarize_berita_acara
@@ -131,7 +131,8 @@ def full_process_pipeline(
         }
 
         # 4. LLM – pasal + berita-acara
-        pasal  = extract_pasal_hukum(polished, MODEL_NAME)
+        pasal_obj = extract_pasal_hukum_models(polished_models, MODEL_NAME)
+        pasal = pasal_obj.raw_markdown          
         berita = generate_berita_acara(polished, MODEL_NAME, pasal)
 
         logging.info("Berita-Acara preview (first 400 chars): %r", berita[:400])

@@ -51,3 +51,15 @@ class Segment(BaseModel):
     @property
     def duration(self) -> float:          # convenience
         return round(self.end - self.start, 3)
+
+# --------------------------------------------------------------------------- #
+# Ekstraksi Pasal
+# --------------------------------------------------------------------------- #
+
+class PasalItem(BaseModel):
+    pasal: str                    # e.g. "Pasal 362 KUHP"
+    deskripsi: Optional[str] = "" # narrative / penjelasan
+
+class PasalExtraction(BaseModel):
+    items: List[PasalItem]
+    raw_markdown: str             # full LLM block (for display)
