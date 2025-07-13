@@ -18,14 +18,14 @@ from app.config import *
 import re
 import requests as _req
 import time
+from app.models import Segment, TranscriptionRequest 
+from pydantic import parse_obj_as   
 
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SCRIBE RELATED
 # ─────────────────────────────────────────────────────────────────────────────
-
-from app.models import TranscriptionRequest 
 
 # --------------------------------------------------------------------------- #
 # 1.  Core upload helper
@@ -320,6 +320,17 @@ Jangan sertakan penjelasan tambahan, markdown, atau narasi apa pun — hanya JSO
     except json.JSONDecodeError:
         print("❌ Failed to parse LLM output")
         return []
+    
+def enhance_with_llm_req(
+    segments: List[Segment],
+    model_name: str
+) -> List[Segment]:
+    """Same polish, but typed in/out with Segment models."""
+    # convert to plain dicts → JSON
+    aligned_dicts = [s.dict(exclude_unset=True) for s in segments]
+    polished_dicts = enhance_with_llm(aligned_dicts, model_name)
+    # validate & return as Segment objects
+    return parse_obj_as(List[Segment], polished_dicts)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # BERITA ACARA

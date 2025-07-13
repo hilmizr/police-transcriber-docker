@@ -9,7 +9,7 @@ Key change:
 """
 
 from typing import List, Optional, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # --------------------------------------------------------------------------- #
 # Transcription
@@ -34,8 +34,20 @@ class MarkdownDocument(BaseModel):
     doc_id: str
     content: str
 
-
 class SummarizeRequest(BaseModel):
     case_id: Optional[str] = None
     markdowns: List[MarkdownDocument]
     model_name: Optional[str] = None
+
+# --------------------------------------------------------------------------- #
+# Polish with LLM
+# --------------------------------------------------------------------------- #
+class Segment(BaseModel):
+    speaker: str
+    start: float = Field(ge=0)
+    end:   float = Field(ge=0)
+    text:  str
+
+    @property
+    def duration(self) -> float:          # convenience
+        return round(self.end - self.start, 3)
