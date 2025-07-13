@@ -4,7 +4,10 @@ import random
 import json
 import os
 from markdown_pdf import MarkdownPdf, Section
-from langchain_community.chat_models import ChatOpenAI
+try:
+    from langchain_openai import ChatOpenAI
+except ImportError:                       
+    from langchain_community.chat_models import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 import json
 import os
@@ -19,15 +22,6 @@ import time
 os.environ["WHISPER_CACHE"] = os.getenv("WHISPER_CACHE", "./cache/whisper")
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 os.makedirs(os.environ["WHISPER_CACHE"], exist_ok=True)
-
-class ChatOpenRouter(ChatOpenAI):
-    openai_api_base: str
-    openai_api_key: str
-    model_name: str
-
-    def __init__(self, model_name: str, openai_api_key: str = os.environ["OPENROUTER_API_KEY"], openai_api_base: str = "https://openrouter.ai/api/v1", **kwargs):
-        super().__init__(openai_api_base=openai_api_base,
-                         openai_api_key=openai_api_key, model_name=model_name, **kwargs)
 
 def enhance_with_llm(aligned_output: List[Dict[str, any]], model_name: str) -> List[Dict[str, any]]:
     """Polish grammar & spelling while preserving speaker / timestamps."""
@@ -71,8 +65,9 @@ Jangan sertakan penjelasan tambahan, markdown, atau narasi apa pun — hanya JSO
         ("user", "{input}")
     ])
 
-    llm = ChatOpenRouter(model_name=model_name,
-                         temperature=0, max_tokens=16000)
+    llm = ChatOpenAI(model_name=model_name,
+                     temperature=0)
+
     chain = prompt | llm
     result = chain.invoke({"input": input_json})
     try:
@@ -134,8 +129,8 @@ Catatan penting:
         ("user", "{input}")
     ])
 
-    llm = ChatOpenRouter(model_name=model_name,
-                         temperature=0.3, max_tokens=4000)
+    llm = ChatOpenAI(model_name=model_name,
+                     temperature=0.3)
     chain = berita_acara_prompt.partial(
         nomor_berita_acara=nomor,
         tanggal=tanggal,
@@ -189,8 +184,8 @@ def extract_pasal_hukum(aligned_segments: list, model_name: str) -> str:
         f"{seg['speaker']}: {seg['text']}" for seg in aligned_segments
     )
 
-    llm = ChatOpenRouter(model_name=model_name,
-                         temperature=0.2, max_tokens=4000)
+    llm = ChatOpenAI(model_name=model_name,
+                     temperature=0.2)
     chain = pasal_prompt | llm
     result = chain.invoke({"input": combined_transcript})
     return result.content
@@ -232,9 +227,8 @@ def summarize_berita_acara(markdowns: List[str], model_name: str) -> Dict[str, A
         ("user", "{input}")
     ])
 
-    llm   = ChatOpenRouter(model_name=model_name,
-                           temperature=0.3,
-                           max_tokens=16_000)
+    llm   = ChatOpenAI(model_name=model_name,
+                       temperature=0.3)
 
     chain = prompt | llm
     return _invoke_llm_json(chain, {"input": joined})
