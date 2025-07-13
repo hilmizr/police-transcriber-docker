@@ -160,33 +160,37 @@ def full_process_pipeline(
                 "LLM returned empty Berita-Acara — check MODEL_NAME, quota, or context length."
             )
         
-        # 4. LLM- Render PDF
+        # 4. Placeholder “PDF” instead of real render 
         full_process_task_status[task_id] = {
-            "message": "Rendering PDF…",
+            "message": "Creating PDF placeholder…",
             "progress": 70,
         }
 
-        # save artefacts ----------------------------------------------------
         pj   = f"{task_id}_{timestamp}_polished.json"
         pm   = f"{task_id}_{timestamp}_pasal.md"
         bamd = f"{task_id}_{timestamp}_berita_acara.md"
-        bapf = f"{task_id}_{timestamp}_berita_acara.pdf"
+        bapf = f"{task_id}_{timestamp}_berita_acara.pdf"   
 
+        # save polished, pasal placeholder, BA markdown exactly as before -----------
         with open(os.path.join(OUTPUT_DIR, pj), "w", encoding="utf-8") as f:
             json.dump(polished, f, ensure_ascii=False, indent=2)
         with open(os.path.join(OUTPUT_DIR, pm), "w", encoding="utf-8") as f:
-            f.write(PASAL_PLACEHOLDER)                       # ← placeholder
+            f.write(PASAL_PLACEHOLDER)
         with open(os.path.join(OUTPUT_DIR, bamd), "w", encoding="utf-8") as f:
             f.write(berita)
 
+        # ------------ NEW: write a 1-line stub PDF and Base64-encode it -----------
         pdf_path = os.path.join(OUTPUT_DIR, bapf)
-        pdf_doc  = MarkdownPdf(toc_level=2)
-        pdf_doc.add_section(Section(berita))
-        pdf_doc.meta["title"] = "Berita Acara Gelar Perkara"
-        pdf_doc.save(pdf_path)
+        pdf_stub = (
+            "%PDF-1.4\n"
+            "% Placeholder - akan diganti DOCX nanti\n"   
+            "%%EOF\n"
+        ).encode("utf-8")      
+        pdf_path = os.path.join(OUTPUT_DIR, bapf)
+        with open(pdf_path, "wb") as f:
+            f.write(pdf_stub)
 
-        with open(pdf_path, "rb") as f:
-            pdf_b64 = base64.b64encode(f.read()).decode()
+        pdf_b64 = base64.b64encode(pdf_stub).decode()
 
         # 6. Callback to Laravel
         payload = {
