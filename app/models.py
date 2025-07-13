@@ -21,11 +21,26 @@ class TranscriptionRequest(BaseModel):
     extra_formats: Optional[List[str]] = []     # e.g. ["srt", "vtt"]
 
 # --------------------------------------------------------------------------- #
+# Polish with LLM
+# --------------------------------------------------------------------------- #
+class Segment(BaseModel):
+    speaker: str
+    start: float = Field(ge=0)
+    end:   float = Field(ge=0)
+    text:  str
+
+    @property
+    def duration(self) -> float:          # convenience
+        return round(self.end - self.start, 3)
+
+# --------------------------------------------------------------------------- #
 # Berita Acara generation (unchanged for now)
 # --------------------------------------------------------------------------- #
 class BeritaAcaraRequest(BaseModel):
     model_name: str
-    aligned_segments: List[Any]                 # produced by service layer
+    aligned_segments: List[Segment]          # now truly typed
+    pasal_list: str = ""                     # optional – already formatted MD
+    nomor: Optional[str] = None              # allow caller override (tests)
 
 # --------------------------------------------------------------------------- #
 # Summaries & markdown utils (unchanged)
@@ -38,19 +53,6 @@ class SummarizeRequest(BaseModel):
     case_id: Optional[str] = None
     markdowns: List[MarkdownDocument]
     model_name: Optional[str] = None
-
-# --------------------------------------------------------------------------- #
-# Polish with LLM
-# --------------------------------------------------------------------------- #
-class Segment(BaseModel):
-    speaker: str
-    start: float = Field(ge=0)
-    end:   float = Field(ge=0)
-    text:  str
-
-    @property
-    def duration(self) -> float:          # convenience
-        return round(self.end - self.start, 3)
 
 # --------------------------------------------------------------------------- #
 # Ekstraksi Pasal

@@ -5,7 +5,7 @@ import logging
 import base64
 from datetime import datetime
 from typing import Dict, List, Optional
-from app.models import TranscriptionRequest, SummarizeRequest, Segment
+from app.models import TranscriptionRequest, SummarizeRequest, Segment, BeritaAcaraRequest
 import requests
 from fastapi import (
     FastAPI,
@@ -30,7 +30,7 @@ from app.services import (
     words_to_sentences,        # sentence grouping
     enhance_with_llm_req,
     extract_pasal_hukum_models,
-    generate_berita_acara,
+    generate_berita_acara_req,
     summarize_task_status,
     summarize_berita_acara
 )
@@ -133,7 +133,13 @@ def full_process_pipeline(
         # 4. LLM – pasal + berita-acara
         pasal_obj = extract_pasal_hukum_models(polished_models, MODEL_NAME)
         pasal = pasal_obj.raw_markdown          
-        berita = generate_berita_acara(polished, MODEL_NAME, pasal)
+
+        req_ba = BeritaAcaraRequest(
+            model_name=MODEL_NAME,
+            aligned_segments=polished_models,
+            pasal_list=pasal
+        )
+        berita = generate_berita_acara_req(req_ba)
 
         logging.info("Berita-Acara preview (first 400 chars): %r", berita[:400])
 

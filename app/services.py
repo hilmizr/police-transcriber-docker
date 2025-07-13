@@ -18,7 +18,7 @@ from app.config import *
 import re
 import requests as _req
 import time
-from app.models import Segment, TranscriptionRequest, PasalExtraction, PasalItem
+from app.models import Segment, TranscriptionRequest, PasalExtraction, PasalItem, BeritaAcaraRequest
 from pydantic import parse_obj_as   
 
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
@@ -336,24 +336,7 @@ def enhance_with_llm_req(
 # BERITA ACARA
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate_nomor_berita_acara():
-    return f"BA-{datetime.now().year}-{random.randint(1000, 9999)}"
-
-def format_tanggal_formal(dt):
-    bulan = {
-        1: "Januari", 2: "Februari", 3: "Maret", 4: "April", 5: "Mei", 6: "Juni",
-        7: "Juli", 8: "Agustus", 9: "September", 10: "Oktober", 11: "November", 12: "Desember"
-    }
-    return f"{dt.day} {bulan[dt.month]} {dt.year}"
-
-def generate_berita_acara(aligned_segments: list, model_name: str, pasal_list: str = "") -> str:
-    nomor = generate_nomor_berita_acara()
-    tanggal = format_tanggal_formal(datetime.now())
-    formatted_input = "\n".join(
-        [f"{seg['speaker']}: {seg['text']}" for seg in aligned_segments])
-
-    berita_acara_prompt = ChatPromptTemplate.from_messages([
-        ("system", f"""
+berita_acara_prompt = """
 Anda adalah notulis resmi dalam gelar perkara kepolisian Republik Indonesia,
 yang harus menyusun berita acara berdasarkan Peraturan Kapolri Nomor 14 Tahun 2012
 tentang Manajemen Penyidikan Tindak Pidana.
@@ -382,7 +365,26 @@ Catatan penting:
 - Hilangkan label speaker, ubah menjadi "Penyidik", "Pelapor", dll bila bisa disimpulkan.
 - Jika tidak diketahui, gunakan penalaran wajar dari konteks.
 - Jangan tulis ulang label, timestamp, atau format JSON. Jawaban harus langsung dalam bentuk Markdown yang bersih dan siap dipublikasikan.
-"""),
+"""
+
+def generate_nomor_berita_acara():
+    return f"BA-{datetime.now().year}-{random.randint(1000, 9999)}"
+
+def format_tanggal_formal(dt):
+    bulan = {
+        1: "Januari", 2: "Februari", 3: "Maret", 4: "April", 5: "Mei", 6: "Juni",
+        7: "Juli", 8: "Agustus", 9: "September", 10: "Oktober", 11: "November", 12: "Desember"
+    }
+    return f"{dt.day} {bulan[dt.month]} {dt.year}"
+
+def generate_berita_acara(aligned_segments: list, model_name: str, pasal_list: str = "") -> str:
+    nomor = generate_nomor_berita_acara()
+    tanggal = format_tanggal_formal(datetime.now())
+    formatted_input = "\n".join(
+        [f"{seg['speaker']}: {seg['text']}" for seg in aligned_segments])
+
+    berita_acara_prompt = ChatPromptTemplate.from_messages([
+        ("system", berita_acara_prompt),
         ("user", "{input}")
     ])
 
@@ -395,6 +397,32 @@ Catatan penting:
     ) | llm
     result = chain.invoke({"input": formatted_input})
     return result.content
+
+def generate_berita_acara_req(req: BeritaAcaraRequest) -> str:
+    """
+    Wrapper that accepts a `BeritaAcaraRequest` object and returns
+    the Markdown string, delegating to the existing generator.
+    """
+    # Fallbacks
+    nomor   = req.nomor or generate_nomor_berita_acara()
+    tanggal = format_tanggal_formal(datetime.now())
+
+    # Build the prompt input from Segment objects
+    formatted_input = "\n".join(
+        f"{seg.speaker}: {seg.text}" for seg in req.aligned_segments
+    )
+
+    # Use the same prompt template as before
+    berita_acara_prompt = ChatPromptTemplate.from_messages([
+        ("system", berita_acara_prompt.format(nomor=nomor,
+                                      tanggal=tanggal,
+                                      pasal_list=req.pasal_list)),
+        ("user", "{input}")
+    ])
+
+    llm   = ChatOpenAI(model_name=req.model_name, temperature=0.3)
+    chain = berita_acara_prompt | llm
+    return chain.invoke({"input": formatted_input}).content
 
 def export_markdown_and_pdf(content: str, md_path: str, pdf_path: str):
     output_dir = os.path.dirname(md_path)
