@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.12.10
 
 # 1. Create a non-root user
 RUN useradd -m -u 1000 user
@@ -9,8 +9,8 @@ WORKDIR /app
 
 # 3. Install ffmpeg and pre-create folders with correct ownership
 RUN apt-get update && apt-get install -y ffmpeg && \
-    mkdir -p static audio_sample output summary_output cache/hf/transformers cache/whisper && \
-    chown -R 1000:1000 static audio_sample output summary_output cache
+    mkdir -p static audio_sample output summary_output && \
+    chown -R 1000:1000 static audio_sample output summary_output
 
 # 4. Switch to non-root user for security
 USER user

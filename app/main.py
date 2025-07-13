@@ -5,7 +5,14 @@ import logging
 import base64
 from datetime import datetime
 from typing import Dict, List, Optional
-from app.models import TranscriptionRequest, SummarizeRequest, Segment, BeritaAcaraRequest
+from app.models import (
+    TranscriptionRequest, 
+    SummarizeRequest, 
+    Segment, 
+    BeritaAcaraRequest, 
+    PasalCaseExtractRequest
+)
+
 import requests
 from fastapi import (
     FastAPI,
@@ -26,10 +33,9 @@ from app.services import (
     transcribe_audio,
     transcribe_audio_req,       
     transcribe_audio_sync_req, 
-    transcribe_audio_sync,     # Scribe (blocking wrapper)
     words_to_sentences,        # sentence grouping
     enhance_with_llm_req,
-    extract_pasal_hukum_models,
+    extract_pasal_from_berita,
     generate_berita_acara_req,
     summarize_task_status,
     summarize_berita_acara
@@ -126,20 +132,26 @@ def full_process_pipeline(
         # Convert back to plain dicts for legacy helpers / JSON dump
         polished = [seg.dict(exclude_unset=True) for seg in polished_models]
 
+        # 4. LLM – pasal + berita-acara
         full_process_task_status[task_id] = {
-            "message": "Extracting pasal hukum…", "progress": 50
+            "message": "Generating Berita Acara…",  
+            "progress": 50,
         }
 
-        # 4. LLM – pasal + berita-acara
-        pasal_obj = extract_pasal_hukum_models(polished_models, MODEL_NAME)
-        pasal = pasal_obj.raw_markdown          
+        PASAL_PLACEHOLDER = (
+            "# Daftar Pasal Hukum (sementara)\n\n"
+            "- (belum diekstraksi – akan dilampirkan kemudian)"
+        )
 
         req_ba = BeritaAcaraRequest(
             model_name=MODEL_NAME,
             aligned_segments=polished_models,
-            pasal_list=pasal
+            pasal_list=PASAL_PLACEHOLDER,
         )
         berita = generate_berita_acara_req(req_ba)
+
+        if not berita.strip():
+            raise RuntimeError("LLM returned empty Berita Acara.")
 
         logging.info("Berita-Acara preview (first 400 chars): %r", berita[:400])
 
@@ -147,12 +159,14 @@ def full_process_pipeline(
             raise RuntimeError(
                 "LLM returned empty Berita-Acara — check MODEL_NAME, quota, or context length."
             )
-
+        
+        # 4. LLM- Render PDF
         full_process_task_status[task_id] = {
-            "message": "Rendering PDF…", "progress": 70
+            "message": "Rendering PDF…",
+            "progress": 70,
         }
 
-        # 5. Save artefacts
+        # save artefacts ----------------------------------------------------
         pj   = f"{task_id}_{timestamp}_polished.json"
         pm   = f"{task_id}_{timestamp}_pasal.md"
         bamd = f"{task_id}_{timestamp}_berita_acara.md"
@@ -161,7 +175,7 @@ def full_process_pipeline(
         with open(os.path.join(OUTPUT_DIR, pj), "w", encoding="utf-8") as f:
             json.dump(polished, f, ensure_ascii=False, indent=2)
         with open(os.path.join(OUTPUT_DIR, pm), "w", encoding="utf-8") as f:
-            f.write(pasal)
+            f.write(PASAL_PLACEHOLDER)                       # ← placeholder
         with open(os.path.join(OUTPUT_DIR, bamd), "w", encoding="utf-8") as f:
             f.write(berita)
 
@@ -177,7 +191,7 @@ def full_process_pipeline(
         # 6. Callback to Laravel
         payload = {
             "task_id": task_id,
-            "pasal_markdown": pasal,
+            "pasal_markdown": PASAL_PLACEHOLDER,             # ← placeholder
             "berita_acara_markdown": berita,
             "berita_acara_pdf_base64": pdf_b64,
             "polished_transcript": polished,
@@ -195,12 +209,15 @@ def full_process_pipeline(
             logging.error("Laravel callback failed: %s", e)
 
         full_process_task_status[task_id] = {
-            "message": "Completed", "progress": 100, "result": payload
+            "message": "Completed",
+            "progress": 100,
+            "result": payload,
         }
 
     except Exception as exc:
         full_process_task_status[task_id] = {
-            "message": f"Error: {exc}", "progress": 100
+            "message": f"Error: {exc}",
+            "progress": 100,
         }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -289,9 +306,109 @@ async def scribe_transcribe_json(req: TranscriptionRequest):
     return {"sentences": sentence_rows, "text": scribe_json["text"]}
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PASAL EXTRACTION
+# ─────────────────────────────────────────────────────────────────────────────
+# ─── status store ────────────────────────────────────────────────────────────
+pasal_case_task_status: Dict[str, Dict[str, object]] = {}
+LARAVEL_ENDPOINT_PASAL= "http://206.189.159.94:8000/api/callback/pasal"  
+
+# ─── background worker ─────────────────────────────────────────────────────
+def pasal_case_background(task_id: str,
+                          case_id: Optional[str],
+                          markdowns: List[str],
+                          model_name: str):
+    try:
+        pasal_case_task_status[task_id] = {
+            "case_id": case_id,
+            "message": "Starting pasal extraction…",
+            "progress": 5,
+        }
+
+        # 1 · Extract pasal as markdown
+        result = extract_pasal_from_berita(markdowns, model_name)
+        # result = {"pasal_markdown": "- Pasal 362 …"}
+
+        # 2 · Persist to disk
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        prefix    = case_id or task_id
+        md_file   = f"{prefix}_{timestamp}_pasal.md"
+        md_path   = os.path.join(SUMMARY_DIR, md_file)
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(result["pasal_markdown"])
+
+        # 3 · Build payload for Laravel (⬅ keeps ids)
+        payload = {
+            "task_id": task_id,
+            "case_id": case_id,
+            "pasal_markdown": result["pasal_markdown"],
+            "saved_files": {
+                "pasal_markdown": md_file
+            }
+        }
+
+        # 4 · POST to Laravel
+        try:
+            logging.info(f"Posting pasal payload → {LARAVEL_ENDPOINT_PASAL}")
+            resp = requests.post(LARAVEL_ENDPOINT_PASAL, json=payload, timeout=10)
+            resp.raise_for_status()
+            logging.info(f"Laravel /pasal responded {resp.status_code}")
+        except Exception as e:
+            logging.error(f"Laravel callback failed: {e}")
+
+        # 5 · Final status (⬅ mirrors summary job shape)
+        pasal_case_task_status[task_id] = {
+            "case_id": case_id,
+            "message": "Completed",
+            "progress": 100,
+            "result": {
+                "pasal_markdown": result["pasal_markdown"],
+                "saved_files": {"pasal_markdown": md_file},
+            },
+        }
+
+    except Exception as e:
+        pasal_case_task_status[task_id] = {
+            "case_id": case_id,
+            "message": f"Error: {e}",
+            "progress": 100,
+        }
+        
+# ─── API routes ─────────────────────────────────────────────────────────────
+@app.post("/pasal-case-extract-async")
+async def pasal_case_extract_async(
+    req: PasalCaseExtractRequest,
+    background_tasks: BackgroundTasks,
+):
+    """
+    Launch an asynchronous job that aggregates several Berita-Acara markdown
+    strings, extracts all relevant pasal hukum, saves the markdown, and
+    notifies the Laravel backend.
+    """
+    ...
+    if not req.markdowns:
+        raise HTTPException(status_code=400, detail="No markdowns provided")
+
+    task_id = str(uuid.uuid4())
+    model   = req.model_name or MODEL_NAME
+    md_text = [m.content for m in req.markdowns]
+
+    background_tasks.add_task(pasal_case_background,
+                              task_id, req.case_id, md_text, model)
+
+    return {"task_id": task_id,
+            "message": "Pasal-extraction job started. "
+                       "Use /status/pasal-case/{task_id} for progress."}
+
+@app.get("/status/pasal-case/{task_id}")
+def get_pasal_case_status(task_id: str):
+    status = pasal_case_task_status.get(task_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Unknown task_id")
+    return status
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SUMMARIZATION
 # ─────────────────────────────────────────────────────────────────────────────
-
 LARAVEL_ENDPOINT_SUMMARY = "http://206.189.159.94:8000/api/callback/summary"  
 
 def summary_background_task(task_id: str, case_id: Optional[str], markdowns: List[str], model_name: str):

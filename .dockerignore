@@ -1,4 +1,11 @@
-".env" 
+# Ignore node modules and logs
+node_modules/
+*.log
+
+# Ignore git repository
+.git
+
+# Ignore environment files
 .env
 
 # Ignore audio samples

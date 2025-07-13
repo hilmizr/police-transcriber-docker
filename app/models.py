@@ -57,11 +57,7 @@ class SummarizeRequest(BaseModel):
 # --------------------------------------------------------------------------- #
 # Ekstraksi Pasal
 # --------------------------------------------------------------------------- #
-
-class PasalItem(BaseModel):
-    pasal: str                    # e.g. "Pasal 362 KUHP"
-    deskripsi: Optional[str] = "" # narrative / penjelasan
-
-class PasalExtraction(BaseModel):
-    items: List[PasalItem]
-    raw_markdown: str             # full LLM block (for display)
+class PasalCaseExtractRequest(BaseModel):
+    case_id: Optional[str] = None
+    markdowns: List[MarkdownDocument]   
+    model_name: Optional[str] = None

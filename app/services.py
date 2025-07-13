@@ -18,7 +18,7 @@ from app.config import *
 import re
 import requests as _req
 import time
-from app.models import Segment, TranscriptionRequest, PasalExtraction, PasalItem, BeritaAcaraRequest
+from app.models import Segment, TranscriptionRequest, BeritaAcaraRequest
 from pydantic import parse_obj_as   
 
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
@@ -336,7 +336,7 @@ def enhance_with_llm_req(
 # BERITA ACARA
 # ─────────────────────────────────────────────────────────────────────────────
 
-berita_acara_prompt = """
+PROMPT_BERITA_ACARA = """
 Anda adalah notulis resmi dalam gelar perkara kepolisian Republik Indonesia,
 yang harus menyusun berita acara berdasarkan Peraturan Kapolri Nomor 14 Tahun 2012
 tentang Manajemen Penyidikan Tindak Pidana.
@@ -384,7 +384,7 @@ def generate_berita_acara(aligned_segments: list, model_name: str, pasal_list: s
         [f"{seg['speaker']}: {seg['text']}" for seg in aligned_segments])
 
     berita_acara_prompt = ChatPromptTemplate.from_messages([
-        ("system", berita_acara_prompt),
+        ("system", PROMPT_BERITA_ACARA),
         ("user", "{input}")
     ])
 
@@ -397,32 +397,6 @@ def generate_berita_acara(aligned_segments: list, model_name: str, pasal_list: s
     ) | llm
     result = chain.invoke({"input": formatted_input})
     return result.content
-
-def generate_berita_acara_req(req: BeritaAcaraRequest) -> str:
-    """
-    Wrapper that accepts a `BeritaAcaraRequest` object and returns
-    the Markdown string, delegating to the existing generator.
-    """
-    # Fallbacks
-    nomor   = req.nomor or generate_nomor_berita_acara()
-    tanggal = format_tanggal_formal(datetime.now())
-
-    # Build the prompt input from Segment objects
-    formatted_input = "\n".join(
-        f"{seg.speaker}: {seg.text}" for seg in req.aligned_segments
-    )
-
-    # Use the same prompt template as before
-    berita_acara_prompt = ChatPromptTemplate.from_messages([
-        ("system", berita_acara_prompt.format(nomor=nomor,
-                                      tanggal=tanggal,
-                                      pasal_list=req.pasal_list)),
-        ("user", "{input}")
-    ])
-
-    llm   = ChatOpenAI(model_name=req.model_name, temperature=0.3)
-    chain = berita_acara_prompt | llm
-    return chain.invoke({"input": formatted_input}).content
 
 def export_markdown_and_pdf(content: str, md_path: str, pdf_path: str):
     output_dir = os.path.dirname(md_path)
@@ -440,62 +414,34 @@ def export_markdown_and_pdf(content: str, md_path: str, pdf_path: str):
 
     return md_path, pdf_path
 
-# ─────────────────────────────────────────────────────────────────────────────
-# EKSTRAKSI PASAL
-# ─────────────────────────────────────────────────────────────────────────────
+def generate_berita_acara_req(req: BeritaAcaraRequest) -> str:
+    """
+    Wrapper that accepts a `BeritaAcaraRequest` object and returns
+    the Markdown string, delegating to the existing generator.
+    """
+    # Fallbacks
+    nomor   = req.nomor or generate_nomor_berita_acara()
+    tanggal = format_tanggal_formal(datetime.now())
 
-pasal_prompt = ChatPromptTemplate.from_messages([
-    ("system", """
-Anda adalah pakar hukum pidana Indonesia. Tugas Anda adalah mengekstraksi atau menentukan peraturan dan pasal hukum yang relevan dari sebuah transkrip gelar perkara.
-
-Langkah Anda:
-1. Periksa apakah dalam transkrip ada penyebutan peraturan hukum (contoh: Pasal 362 KUHP tentang pencurian).
-2. Jika tidak disebutkan secara eksplisit, gunakan pengetahuan Anda untuk menentukan pasal dan peraturan hukum yang **paling mungkin relevan** berdasarkan isi percakapan.
-3. Sertakan nama undang-undang dan pasal yang tepat (contoh: "Pasal 378 KUHP tentang penipuan").
-
-Contohnya
-- Pasal 362 KUHP tentang pencurian
-- Pasal 55 KUHP tentang turut serta melakukan tindak pidana
-- Pasal 184 KUHAP tentang alat bukti
-
-Beri narasi dan penjelasan tambahan
-"""),
-    ("user", "{input}")
-])
-
-
-def extract_pasal_hukum(aligned_segments: list, model_name: str) -> str:
-    combined_transcript = "\n".join(
-        f"{seg['speaker']}: {seg['text']}" for seg in aligned_segments
+    # Build the prompt input from Segment objects
+    formatted_input = "\n".join(
+        f"{seg.speaker}: {seg.text}" for seg in req.aligned_segments
     )
 
-    llm = ChatOpenAI(model_name=model_name,
-                     temperature=0.2)
-    chain = pasal_prompt | llm
-    result = chain.invoke({"input": combined_transcript})
-    return result.content
+    # Use the same prompt template as before
+    berita_acara_prompt = ChatPromptTemplate.from_messages([
+        ("system", PROMPT_BERITA_ACARA.format(nomor=nomor,
+                                      tanggal=tanggal,
+                                      pasal_list=req.pasal_list)),
+        ("user", "{input}")
+    ])
 
-def extract_pasal_hukum_models(
-    segments: List[Segment], model_name: str
-) -> PasalExtraction:
-    transcript = "\n".join(f"{s.speaker}: {s.text}" for s in segments)
-
-    llm  = ChatOpenAI(model_name=model_name, temperature=0.2)
-    text = (pasal_prompt | llm).invoke({"input": transcript}).content
-
-    # very light parsing: split by lines that start with "Pasal"
-    items: List[PasalItem] = []
-    for line in text.splitlines():
-        if line.strip().lower().startswith("pasal"):
-            parts = line.split(" ", 3)  # "Pasal 362 KUHP tentang ..."
-            if len(parts) >= 3:
-                nomor = " ".join(parts[:3])          # "Pasal 362 KUHP"
-                desc  = parts[3] if len(parts) == 4 else ""
-                items.append(PasalItem(pasal=nomor, deskripsi=desc))
-    return PasalExtraction(items=items, raw_markdown=text)
+    llm   = ChatOpenAI(model_name=req.model_name, temperature=0.3)
+    chain = berita_acara_prompt | llm
+    return chain.invoke({"input": formatted_input}).content
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SUMMARY RELATED
+# EKSTRAKSI PASAL
 # ─────────────────────────────────────────────────────────────────────────────
 _MAX_RETRY           = 3
 
@@ -515,6 +461,42 @@ def _invoke_llm_json(chain, payload: Dict[str, str]) -> Dict[str, Any]:
                 )
     return {}
 
+def extract_pasal_from_berita(
+    markdowns: List[str],
+    model_name: str,
+) -> Dict[str, Any]:
+    """
+    Accept several Berita-Acara markdown docs, return:
+        { "pasal_markdown": "<bullet list / markdown table of pasal>" }
+
+    The identical structure to summarize_berita_acara makes front-end
+    handling trivial (just check the key name).
+    """
+    joined = "\n\n---\n\n".join(markdowns)
+
+    prompt = ChatPromptTemplate.from_messages([
+        (
+            "system",
+            "Anda adalah pakar hukum pidana Indonesia.\n"
+            "Anda akan menerima beberapa Berita Acara (Markdown) terpisah.\n"
+            "Rangkum **daftar lengkap** pasal/undang-undang yang relevan.\n\n"
+            "**PENTING**: Kembalikan output berupa JSON valid **tanpa penjelasan lain**.\n\n"
+            "Format JSON:\n"
+            "{{\n"
+            "  \"pasal_markdown\": \"- Pasal 362 KUHP tentang pencurian\\n"
+            "                      - Pasal 55 KUHP tentang turut serta ...\"\n"
+            "}}"
+        ),
+        ("user", "{input}"),
+    ])
+
+    llm = ChatOpenAI(model_name=model_name, temperature=0.2)
+    chain = prompt | llm
+    return _invoke_llm_json(chain, {"input": joined})
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SUMMARY RELATED
+# ─────────────────────────────────────────────────────────────────────────────
 def summarize_berita_acara(markdowns: List[str], model_name: str) -> Dict[str, Any]:
     joined = "\n\n---\n\n".join(markdowns)
 

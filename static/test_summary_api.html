@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Async Summarization</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 700px;
+            margin: 2rem auto;
+        }
+        
+        textarea,
+        input[type=file] {
+            width: 100%;
+            font-family: monospace;
+            margin-bottom: 1rem;
+        }
+        
+        button {
+            padding: 0.5rem 1rem;
+            font-size: 1rem;
+        }
+        
+        #progressBar {
+            width: 100%;
+            background: #eee;
+            border-radius: 5px;
+            margin: 1rem 0;
+            position: relative;
+            color: #fff;
+            font-weight: bold;
+            text-align: center;
+            user-select: none;
+        }
+        
+        #progressBar>div {
+            height: 20px;
+            width: 0%;
+            background: #4caf50;
+            border-radius: 5px;
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        pre {
+            background: #f4f4f4;
+            border: 1px solid #ddd;
+            padding: 0.5rem;
+            max-height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        
+        #summaryMarkdown {
+            border: 1px solid #ccc;
+            padding: 1rem;
+            margin-top: 1rem;
+            background: #fff;
+        }
+        
+        #downloadLinks a {
+            display: inline-block;
+            margin-right: 1rem;
+            margin-top: 0.5rem;
+            color: #0066cc;
+            text-decoration: none;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>Async Summarization</h1>
+
+    <h3>Option A: Paste Markdown JSON Array</h3>
+    <textarea id="jsonInput" rows="8" placeholder='Paste JSON like [{"doc_id":"1", "content":"...markdown text..."}, ...]'></textarea>
+
+    <h3>Option B: Upload Markdown Files (.md)</h3>
+    <input type="file" id="fileInput" multiple accept=".md,text/markdown" />
+
+    <br />
+    <label for="caseIdInput">Case ID (optional):</label>
+    <input type="text" id="caseIdInput" placeholder="Enter case ID if any" />
+
+    <br /><br />
+    <button id="startBtn">Start Summarization</button>
+
+    <p><strong>Case ID:</strong> <span id="displayCaseId">-</span></p>
+    <p><strong>Task ID:</strong> <span id="displayTaskId">-</span></p>
+    <div id="progressContainer" style="display:none;">
+        <div id="progressBar">
+            <div><span id="progressNumber">0%</span></div>
+        </div>
+        <p id="statusMessage">Waiting to start...</p>
+        <p>Elapsed time: <span id="elapsedTime">0s</span></p>
+    </div>
+
+    <h3>Response JSON:</h3>
+    <pre id="jsonResponse"></pre>
+
+    <h3>Summary Markdown:</h3>
+    <div id="summaryMarkdown"></div>
+
+    <h3>Download Summary Files:</h3>
+    <div id="downloadLinks"></div>
+
+    <script>
+        const jsonInput = document.getElementById('jsonInput');
+        const fileInput = document.getElementById('fileInput');
+        const caseIdInput = document.getElementById('caseIdInput');
+        const startBtn = document.getElementById('startBtn');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.querySelector('#progressBar > div');
+        const progressNumber = document.getElementById('progressNumber');
+        const statusMessage = document.getElementById('statusMessage');
+        const elapsedTimeSpan = document.getElementById('elapsedTime');
+        const jsonResponsePre = document.getElementById('jsonResponse');
+        const summaryMarkdownDiv = document.getElementById('summaryMarkdown');
+        const downloadLinksDiv = document.getElementById('downloadLinks');
+        const displayCaseId = document.getElementById('displayCaseId');
+        const displayTaskId = document.getElementById('displayTaskId');
+
+        let taskId = null;
+        let startTime = null;
+        let pollTimeout = null;
+
+        function resetUI() {
+            displayCaseId.textContent = '-';
+            displayTaskId.textContent = '-';
+            progressContainer.style.display = 'none';
+            progressBar.style.width = '0%';
+            progressNumber.textContent = '0%';
+            statusMessage.textContent = 'Waiting to start...';
+            elapsedTimeSpan.textContent = '0s';
+            jsonResponsePre.textContent = '';
+            summaryMarkdownDiv.textContent = '';
+            downloadLinksDiv.innerHTML = '';
+            startBtn.disabled = false;
+            taskId = null;
+            startTime = null;
+            if (pollTimeout) clearTimeout(pollTimeout);
+        }
+
+        async function readFilesAsMarkdown(files) {
+            const results = [];
+            for (const file of files) {
+                const content = await file.text();
+                results.push({
+                    doc_id: file.name,
+                    content
+                });
+            }
+            return results;
+        }
+
+        async function startSummarization() {
+            resetUI();
+
+            displayCaseId.textContent = caseIdInput.value.trim() || '-';
+
+            let markdowns = [];
+            if (jsonInput.value.trim()) {
+                try {
+                    markdowns = JSON.parse(jsonInput.value.trim());
+                    if (!Array.isArray(markdowns)) throw new Error("JSON input must be an array");
+                    markdowns.forEach(item => {
+                        if (!item.doc_id || !item.content) throw new Error("Each item must have doc_id and content");
+                    });
+                } catch (e) {
+                    alert("Invalid JSON input: " + e.message);
+                    return;
+                }
+            } else if (fileInput.files.length > 0) {
+                markdowns = await readFilesAsMarkdown(fileInput.files);
+            } else {
+                alert("Please provide markdown content either by JSON input or uploading files.");
+                return;
+            }
+
+            const payload = {
+                case_id: caseIdInput.value.trim() || undefined,
+                markdowns: markdowns,
+            };
+
+            startBtn.disabled = true;
+            progressContainer.style.display = 'block';
+            statusMessage.textContent = 'Starting summarization...';
+            startTime = Date.now();
+            elapsedTimeSpan.textContent = '0s';
+
+            try {
+                const resp = await fetch('https://ev0gvz0iphr3tv-8000.proxy.runpod.net/summarize-case-async', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || data.message || 'Failed to start summarization');
+
+                taskId = data.task_id;
+                displayTaskId.textContent = taskId;
+                statusMessage.textContent = 'Summarization started. Task ID: ' + taskId;
+
+                pollStatus();
+            } catch (e) {
+                alert('Error: ' + e.message);
+                resetUI();
+            }
+        }
+
+        async function pollStatus() {
+            if (!taskId) return;
+            try {
+                const resp = await fetch(`https://ev0gvz0iphr3tv-8000.proxy.runpod.net/status/summarize/${taskId}`);
+                if (!resp.ok) throw new Error('Failed to get status');
+                const data = await resp.json();
+
+                displayCaseId.textContent = data.case_id || '-';
+
+                statusMessage.textContent = data.message || 'No status message';
+                const prog = data.progress || 0;
+                progressBar.style.width = prog + '%';
+                progressNumber.textContent = prog + '%';
+
+                const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
+                elapsedTimeSpan.textContent = elapsedSeconds + 's';
+
+                if (prog < 100) {
+                    pollTimeout = setTimeout(pollStatus, 3000);
+                } else {
+                    if (data.message && data.message.toLowerCase().includes('error')) {
+                        jsonResponsePre.textContent = '';
+                        summaryMarkdownDiv.textContent = '';
+                        downloadLinksDiv.innerHTML = '';
+                    } else if (data.result) {
+                        jsonResponsePre.textContent = JSON.stringify(data.result, null, 2);
+                        summaryMarkdownDiv.innerHTML = marked.parse(data.result.summary_markdown || '_No summary generated_');
+                        downloadLinksDiv.innerHTML = '';
+
+                        const sf = data.result.saved_files || {};
+                        for (const [key, filename] of Object.entries(sf)) {
+                            const a = document.createElement('a');
+                            a.href = `https://ev0gvz0iphr3tv-8000.proxy.runpod.net/download?file=${encodeURIComponent(filename)}`;
+                            a.textContent = `Download ${filename}`;
+                            a.download = filename;
+                            a.target = '_blank';
+                            downloadLinksDiv.appendChild(a);
+                        }
+                    }
+                    startBtn.disabled = false;
+                }
+
+            } catch (e) {
+                statusMessage.textContent = 'Error fetching status: ' + e.message;
+                startBtn.disabled = false;
+            }
+        }
+
+        startBtn.addEventListener('click', startSummarization);
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+</body>
+
+</html>
